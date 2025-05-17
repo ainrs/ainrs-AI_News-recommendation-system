@@ -185,16 +185,40 @@ class LangChainService:
                 # 동기 버전 분석 호출 시도
                 import asyncio
                 try:
-                    # asyncio 이벤트 루프가 있는지 확인
-                    loop = asyncio.get_event_loop()
-                    if loop.is_running():
-                        # 이미 실행 중인 이벤트 루프가 있으면 새 루프 생성
-                        new_loop = asyncio.new_event_loop()
-                        asyncio.set_event_loop(new_loop)
-                        sentiment_result = new_loop.run_until_complete(
-                            sentiment_service.analyze_sentiment(f"{title} {content[:1000]}")
-                        )
-                        new_loop.close()
+                    # 안전한 방식으로 비동기 처리
+                    sentiment_text = f"{title} {content[:1000]}"
+
+                    # 헬퍼 메소드 - 클래스에 아래 메소드 추가됨
+                    def run_async_safely(coro):
+                        """비동기 코루틴을 안전하게 실행하는 헬퍼 함수"""
+                        try:
+                            # 이미 실행 중인 루프가 있는지 확인
+                            try:
+                                loop = asyncio.get_event_loop()
+                                if loop.is_running():
+                                    # 동기 방식으로 처리 (백업 함수 호출)
+                                    return None  # 표시용 - 아래에서 감지하여 백업 함수 사용
+                            except RuntimeError:
+                                pass  # 루프가 없는 경우
+
+                            # 새 루프 생성 및 실행
+                            loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(loop)
+                            result = loop.run_until_complete(coro)
+                            loop.close()
+                            return result
+                        except Exception as e:
+                            logger.error(f"비동기 실행 오류: {e}")
+                            return None
+
+                    # 비동기 함수 실행
+                    sentiment_result = run_async_safely(
+                        sentiment_service.analyze_sentiment(sentiment_text)
+                    )
+
+                    # 비동기 호출 실패 시 백업 사용
+                    if sentiment_result is None:
+                        sentiment_label, sentiment_score = self._analyze_sentiment_backup(content)
                     else:
                         # 기존 루프 사용
                         sentiment_result = loop.run_until_complete(
@@ -218,8 +242,12 @@ class LangChainService:
                     sentiment_label, sentiment_score = self._analyze_sentiment_backup(content)
             except Exception as sentiment_error:
                 logger.error(f"감정 분석 중 오류 (백업 방식 사용): {str(sentiment_error)}")
-                # 백업 감정 분석 로직 사용
-                sentiment_label, sentiment_score = self._analyze_sentiment_backup(content)
+                # 백업 감정 분석 로직 사용 - 동기 함수이므로 직접 호출
+                try:
+                    sentiment_label, sentiment_score = self._analyze_sentiment_backup(content)
+                except Exception as e:
+                    logger.error(f"백업 감정 분석 실패: {e}")
+                    sentiment_label, sentiment_score = "neutral", 0.0  # 기본값 설정
 
             # 4. 신뢰도 분석 - 고급 NLP 기반
             try:
@@ -227,23 +255,49 @@ class LangChainService:
                 from app.services.trust_analysis_service import get_trust_analysis_service
                 trust_service = get_trust_analysis_service()
 
-                # 동기 버전 신뢰도 분석 호출
+                # 동기 버전 신뢰도 분석 호출 (안전한 방식으로)
                 import asyncio
                 try:
-                    loop = asyncio.get_event_loop()
-                    if loop.is_running():
-                        new_loop = asyncio.new_event_loop()
-                        asyncio.set_event_loop(new_loop)
-                        metadata = {"title": title}
-                        trust_result = new_loop.run_until_complete(
-                            trust_service.calculate_trust_score(f"{title} {content[:2000]}", metadata)
-                        )
+                    # 이전에 정의한 안전한 실행 방식 적용
+                    metadata = {"title": title}
+                    trust_text = f"{title} {content[:2000]}"
+
+                    # 안전한 비동기 실행 함수 사용
+                    def run_trust_async_safely():
+                        """신뢰도 분석을 안전하게 실행하는 함수"""
+                        try:
+                            # 이미 실행 중인 루프가 있는지 확인
+                            try:
+                                loop = asyncio.get_event_loop()
+                                if loop.is_running():
+                                    # 이벤트 루프가 이미 실행 중이면 백업 사용
+                                    return None
+                            except RuntimeError:
+                                pass  # 루프가 없는 경우
+
+                            # 새 루프에서 실행
+                            loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(loop)
+                            result = loop.run_until_complete(
+                                trust_service.calculate_trust_score(trust_text, metadata)
+                            )
+                            loop.close()
+                            return result
+                        except Exception as e:
+                            logger.error(f"신뢰도 비동기 실행 오류: {e}")
+                            return None
+
+                    # 비동기 실행
+                    trust_result = run_trust_async_safely()
+
+                    # 실패 시 백업 사용
+                    if trust_result is None:
+                        trust_score = self._calculate_trust_score_backup(title, content, keywords)
                         # 딕셔너리 형태로 반환되는 결과 처리
                         if isinstance(trust_result, dict) and "trust_score" in trust_result:
                             trust_score = trust_result["trust_score"]
                         else:
                             trust_score = trust_result  # 이전 버전과의 호환성 유지
-                        new_loop.close()
                     else:
                         metadata = {"title": title}
                         trust_result = loop.run_until_complete(
@@ -269,8 +323,12 @@ class LangChainService:
                     new_loop.close()
             except Exception as trust_error:
                 logger.error(f"신뢰도 분석 중 오류 (기본값 사용): {str(trust_error)}")
-                # 백업 신뢰도 추정 로직
-                trust_score = self._calculate_trust_score_backup(title, content, keywords)
+                # 백업 신뢰도 추정 로직 - 동기 함수이므로 직접 호출
+                try:
+                    trust_score = self._calculate_trust_score_backup(title, content, keywords)
+                except Exception as e:
+                    logger.error(f"백업 신뢰도 분석 실패: {e}")
+                    trust_score = 0.6  # 기본 신뢰도 값
 
             # 5. 주제 분류
             topics = self._extract_topics_from_keywords(keywords, title)

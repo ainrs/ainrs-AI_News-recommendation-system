@@ -177,6 +177,41 @@ class EmbeddingService:
             )
         return self.vectorstore
 
+    def get_embedding_with_model(self, text: str, model_name: str = "default") -> List[float]:
+        """
+        특정 모델을 지정하여 텍스트의 임베딩을 가져옵니다.
+
+        Args:
+            text: 임베딩할 텍스트
+            model_name: 사용할 모델 이름 ("default", "news-ko", "multilingual", "sentiment" 등)
+
+        Returns:
+            임베딩 벡터
+        """
+        if not text:
+            logger.warning("임베딩할 텍스트가 비어 있습니다.")
+            # 기본 임베딩 차원과 동일한 제로 벡터 반환
+            return [0.0] * 1536
+
+        # 텍스트 전처리
+        text = self._preprocess_text(text)
+
+        try:
+            # 지정된 모델 가져오기
+            if model_name in self.specialized_embeddings:
+                model = self.specialized_embeddings[model_name]
+                # SentenceTransformer 모델 사용
+                embedding = model.encode(text).tolist()
+                return embedding
+            else:
+                # 모델이 없으면 기본 OpenAI 임베딩 사용
+                logger.info(f"지정된 모델 {model_name}을 찾을 수 없어 기본 임베딩 사용")
+                return self.openai_embeddings.embed_query(text)
+        except Exception as e:
+            logger.error(f"임베딩 생성 중 오류 (모델 {model_name}): {str(e)}")
+            # 오류 시 기본 OpenAI 임베딩 시도
+            return self.openai_embeddings.embed_query(text)
+
     def get_embedding(self, text: str, task_type: str = "default", fallback: bool = True) -> List[float]:
         """
         단일 텍스트에 대한 임베딩을 가져옵니다.

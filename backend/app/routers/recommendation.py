@@ -11,16 +11,14 @@ from pydantic import BaseModel
 from app.db.mongodb import get_mongodb_database
 from app.services.hybrid_recommendation import get_hybrid_recommendation_service
 from app.services.recommendation_service import get_recommendation_service
+from app.services.bert4rec_service import get_bert4rec_service
 
-# 라우터 생성 - 주 경로와 호환성을 위한 별칭 경로 모두 포함
 router = APIRouter(tags=["recommendation"])
 
-# 요청 모델
 class InterestBasedRequest(BaseModel):
     categories: List[str]
     limit: int = 8
 
-# 응답 모델
 class NewsRecommendation(BaseModel):
     id: str
     title: str
@@ -32,7 +30,6 @@ class NewsRecommendation(BaseModel):
     trust_score: Optional[float] = None
     sentiment_score: Optional[float] = None
 
-# 경로 1: 주 경로 (새 구조)
 @router.get("/recommendation/personalized/{user_id}", response_model=List[NewsRecommendation])
 async def get_personalized_recommendations_main(
     user_id: str,
@@ -56,21 +53,16 @@ async def get_personalized_recommendations_main(
         List[NewsRecommendation]: 추천된 뉴스 목록
     """
     try:
-        # 하이브리드 추천 서비스 가져오기
         recommendation_service = get_hybrid_recommendation_service()
-
-        # 개인화된 추천 가져오기
         recommendations = await recommendation_service.get_personalized_recommendations(
             user_id=user_id,
             limit=limit,
             diversity_level=diversity_level
         )
-
         return recommendations
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"추천 생성 중 오류 발생: {str(e)}")
 
-# 경로 2: 이전 버전과의 호환성을 위한 별칭 경로
 @router.get("/recommendations/{user_id}", response_model=List[NewsRecommendation])
 async def get_recommendations_legacy(
     user_id: str,
@@ -90,22 +82,17 @@ async def get_recommendations_legacy(
     Returns:
         List[NewsRecommendation]: 추천된 뉴스 목록
     """
-    # 하이브리드 추천 서비스 가져오기
     recommendation_service = get_hybrid_recommendation_service()
-
     try:
-        # 개인화된 추천 가져오기
         recommendations = await recommendation_service.get_personalized_recommendations(
             user_id=user_id,
             limit=limit,
             diversity_level=diversity_level
         )
-
         return recommendations
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"추천 생성 중 오류 발생: {str(e)}")
 
-# 경로 1: 주 경로 (새 구조)
 @router.post("/recommendation/interests", response_model=List[NewsRecommendation])
 async def get_interest_based_recommendations_main(
     request: InterestBasedRequest
@@ -123,20 +110,15 @@ async def get_interest_based_recommendations_main(
         List[NewsRecommendation]: 추천된 뉴스 목록
     """
     try:
-        # 하이브리드 추천 서비스 가져오기
         recommendation_service = get_hybrid_recommendation_service()
-
-        # 관심사 기반 추천 가져오기
         recommendations = await recommendation_service.get_interest_based_recommendations(
             categories=request.categories,
             limit=request.limit
         )
-
         return recommendations
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"추천 생성 중 오류 발생: {str(e)}")
 
-# 경로 2: 이전 버전과의 호환성을 위한 별칭 경로
 @router.post("/recommendation/interests", response_model=List[NewsRecommendation])
 async def get_interest_based_recommendations_legacy(
     request: InterestBasedRequest
@@ -152,21 +134,16 @@ async def get_interest_based_recommendations_legacy(
     Returns:
         List[NewsRecommendation]: 추천된 뉴스 목록
     """
-    # 하이브리드 추천 서비스 가져오기
     recommendation_service = get_hybrid_recommendation_service()
-
     try:
-        # 관심사 기반 추천 가져오기
         recommendations = await recommendation_service.get_interest_based_recommendations(
             categories=request.categories,
             limit=request.limit
         )
-
         return recommendations
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"추천 생성 중 오류 발생: {str(e)}")
 
-# 경로 1: 주 경로 (새 구조)
 @router.get("/recommendation/trending", response_model=List[NewsRecommendation])
 async def get_trending_recommendations_main(
     limit: int = Query(8, ge=1, le=20)
@@ -183,13 +160,8 @@ async def get_trending_recommendations_main(
         List[NewsRecommendation]: 추천된 뉴스 목록
     """
     try:
-        # 추천 서비스 가져오기
         recommendation_service = get_recommendation_service()
-
-        # 트렌딩 뉴스 가져오기
         trending_news = await recommendation_service.get_trending_news(limit=limit)
-
-        # 응답 모델로 변환
         return [{
             "id": news.id,
             "title": news.title,
@@ -204,7 +176,6 @@ async def get_trending_recommendations_main(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"추천 생성 중 오류 발생: {str(e)}")
 
-# 경로 2: 이전 버전과의 호환성을 위한 별칭 경로
 @router.get("/news/trending", response_model=List[NewsRecommendation])
 async def get_trending_recommendations_news_legacy(
     limit: int = Query(10, ge=1, le=20)
@@ -220,14 +191,9 @@ async def get_trending_recommendations_news_legacy(
     Returns:
         List[NewsRecommendation]: 추천된 뉴스 목록
     """
-    # 추천 서비스 가져오기
     recommendation_service = get_recommendation_service()
-
     try:
-        # 트렌딩 뉴스 가져오기
         trending_news = await recommendation_service.get_trending_news(limit=limit)
-
-        # 응답 모델로 변환
         return [{
             "id": news.id,
             "title": news.title,
@@ -241,3 +207,36 @@ async def get_trending_recommendations_news_legacy(
         } for news in trending_news]
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"추천 생성 중 오류 발생: {str(e)}")
+
+@router.get("/news/cold-start", response_model=List[NewsRecommendation])
+async def get_cold_start_recommendations(
+    limit: int = Query(5, description="반환할 추천 뉴스의 수")
+):
+    """
+    콜드 스타트 문제를 위한, 신규 사용자/방문자를 위한 추천 뉴스를 제공합니다.
+    사용자 데이터나 상호작용 내역이 없는 상태에서도 다양하고 유익한 뉴스를 추천합니다.
+
+    Args:
+        limit: 반환할 뉴스 항목 수
+
+    Returns:
+        List[NewsRecommendation]: 추천된 뉴스 목록
+    """
+    bert4rec_service = get_bert4rec_service()
+    try:
+        cold_start_news = bert4rec_service.get_cold_start_recommendations(limit=limit)
+        return [
+            {
+                "id": str(news.get("_id")),
+                "title": news.get("title", ""),
+                "source": news.get("source", ""),
+                "published_date": news.get("published_date", datetime.utcnow()),
+                "summary": news.get("summary", ""),
+                "image_url": news.get("image_url", ""),
+                "categories": news.get("categories", []),
+                "trust_score": news.get("trust_score", 0.7),
+                "sentiment_score": news.get("sentiment_score", 0.0)
+            } for news in cold_start_news
+        ]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"콜드 스타트 추천 생성 중 오류 발생: {str(e)}")

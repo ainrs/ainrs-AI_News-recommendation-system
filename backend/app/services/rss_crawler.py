@@ -4,6 +4,7 @@ import hashlib
 import logging
 import requests
 import feedparser
+import uuid
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 from bs4 import BeautifulSoup
@@ -58,8 +59,25 @@ class RSSCrawler:
                 entry_count = 0
                 for entry in feed.entries:
                     try:
-                        article = self._process_entry(entry, source)
-                        if article:
+                        # 기본 정보만 빠르게 추출하여 저장 (AI 분석 없이)
+                        article = self._process_entry_basic(entry, source)
+                        if article and not article.get('existing', False):
+                            # 기본 정보로 DB에 저장 (빠른 UI 표시용)
+                            try:
+                                # _id가 없으면 새로 생성
+                                if '_id' not in article:
+                                    article['_id'] = hashlib.md5(article['url'].encode('utf-8')).hexdigest()
+
+                                logger.info(f"🔄 기본 정보로 기사 저장: {article['title'][:30]}...")
+                                news_collection.insert_one(article)
+
+                                # 수집된 기사 목록에 추가 (AI 분석은 나중에 사용자가 클릭할 때 수행)
+                                all_entries.append(article)
+                                entry_count += 1
+                            except Exception as db_error:
+                                logger.error(f"❌ 기본 기사 DB 저장 오류: {str(db_error)}")
+                        elif article and article.get('existing', False):
+                            # 이미 존재하는 항목도 목록에 추가
                             all_entries.append(article)
                             entry_count += 1
                     except Exception as e:
@@ -72,7 +90,151 @@ class RSSCrawler:
                 continue
 
         logger.info(f"📊 총 {len(all_entries)}개 기사 수집 완료")
+
+        # 수집된 기사가 없는 경우 디버깅
+        if len(all_entries) == 0:
+            logger.warning("⚠️ 수집된 기사가 없습니다! RSS 피드 URL과 파싱 로직을 확인하세요.")
+        else:
+            # 첫 번째 기사 정보 출력 (디버깅용)
+            first_article = all_entries[0]
+            logger.info(f"🔍 첫 번째 기사 정보: 제목='{first_article.get('title', '제목 없음')[:30]}...', URL={first_article.get('url', 'URL 없음')}")
+
         return all_entries
+
+    def _process_entry_basic(self, entry: Dict[str, Any], source: str) -> Optional[Dict[str, Any]]:
+        """빠르게 기본 정보만 추출하여 기사 객체 생성 (콜드 스타트 문제 해결용)"""
+        # Extract URL
+        url = entry.get('link')
+        if not url:
+            return None
+
+        # Check if article already exists in database
+        existing = news_collection.find_one({"url": url})
+        if existing:
+            logger.info(f"📋 기사가 이미 DB에 존재합니다: {url}")
+            return {
+                "_id": existing["_id"],
+                "url": url,
+                "title": entry.get('title', '').strip(),
+                "source": source,
+                "existing": True  # 기존 기사임을 표시
+            }
+
+        # Extract published date
+        published_date = None
+        if 'published_parsed' in entry:
+            published_date = datetime(*entry.published_parsed[:6])
+        elif 'updated_parsed' in entry:
+            published_date = datetime(*entry.updated_parsed[:6])
+        else:
+            published_date = datetime.utcnow()
+
+        # Extract title
+        title = entry.get('title', '').strip()
+        if not title:
+            return None
+
+        # Extract basic summary
+        summary = ''
+        if 'summary' in entry:
+            soup = BeautifulSoup(entry.summary, 'html.parser')
+            summary = soup.get_text(separator=' ', strip=True)
+
+        # Extract basic image (빠른 처리용)
+        image_url = ''
+        if hasattr(entry, 'media_thumbnail') and entry.media_thumbnail:
+            media_thumb = entry.media_thumbnail
+            if isinstance(media_thumb, list) and len(media_thumb) > 0:
+                thumb = media_thumb[0]
+                if isinstance(thumb, dict) and 'url' in thumb:
+                    image_url = thumb['url']
+
+        # 카테고리 정보 추출
+        categories = []
+        # 항목의 태그나 카테고리 필드가 있는 경우
+        if hasattr(entry, 'tags') and entry.tags:
+            for tag in entry.tags:
+                if hasattr(tag, 'term'):
+                    categories.append(tag.term)
+
+        # 카테고리가 비어있는 경우 기본 카테고리 추가
+        if not categories:
+            # 소스와 제목에서 카테고리 추론
+            title_lower = title.lower() if title else ""
+
+            # 프론트엔드 카테고리와 일치하도록 정의
+            # (인공지능, 빅데이터, 클라우드, 로봇, 블록체인, 메타버스, IT기업, 스타트업, AI서비스, 칼럼)
+            if "ai" in title_lower or "인공지능" in title_lower or "머신러닝" in title_lower or "딥러닝" in title_lower:
+                categories = ["인공지능"]
+            elif "빅데이터" in title_lower or "데이터" in title_lower or "data" in title_lower:
+                categories = ["빅데이터"]
+            elif "클라우드" in title_lower or "cloud" in title_lower:
+                categories = ["클라우드"]
+            elif "로봇" in title_lower or "robot" in title_lower:
+                categories = ["로봇"]
+            elif "블록체인" in title_lower or "암호화폐" in title_lower or "blockchain" in title_lower or "crypto" in title_lower:
+                categories = ["블록체인"]
+            elif "메타버스" in title_lower or "가상현실" in title_lower or "증강현실" in title_lower or "metaverse" in title_lower or "vr" in title_lower or "ar" in title_lower:
+                categories = ["메타버스"]
+            elif "it" in title_lower or "기업" in title_lower or "회사" in title_lower or "company" in title_lower or "테크" in title_lower:
+                categories = ["IT기업"]
+            elif "스타트업" in title_lower or "startup" in title_lower or "벤처" in title_lower:
+                categories = ["스타트업"]
+            elif "서비스" in title_lower or "플랫폼" in title_lower or "service" in title_lower or "platform" in title_lower:
+                categories = ["AI서비스"]
+            elif "칼럼" in title_lower or "opinion" in title_lower or "column" in title_lower or "기고" in title_lower or "사설" in title_lower:
+                categories = ["칼럼"]
+            else:
+                categories = ["인공지능"]  # 기본값은 인공지능으로 설정
+
+        # ID 생성
+        _id = hashlib.md5(url.encode('utf-8')).hexdigest()
+
+        # 내용(content) 추출 시도
+        content = ""
+        # 1. content 필드 확인
+        if hasattr(entry, 'content') and entry.content:
+            if isinstance(entry.content, list) and len(entry.content) > 0:
+                if hasattr(entry.content[0], 'value'):
+                    content_html = entry.content[0].value
+                    soup = BeautifulSoup(content_html, 'html.parser')
+                    content = soup.get_text(separator=' ', strip=True)
+
+        # 2. content가 없으면 description 필드 확인
+        if not content and hasattr(entry, 'description'):
+            soup = BeautifulSoup(entry.description, 'html.parser')
+            content = soup.get_text(separator=' ', strip=True)
+
+        # 3. 여전히 내용이 없으면 summary 필드 확인
+        if not content and summary:
+            content = summary
+
+        # 4. 그래도 내용이 없으면 최소한 제목을 내용으로 사용
+        if not content:
+            content = title + " (내용 없음)"
+
+        # 기본 정보만으로 빠르게 기사 객체 생성
+        basic_article = {
+            "_id": _id,
+            "title": title,
+            "url": url,
+            "source": source,
+            "published_date": published_date,
+            "summary": summary[:500] if summary else title[:100],  # 간단한 요약만
+            "image_url": image_url or "https://via.placeholder.com/300x200?text=No+Image",
+            "categories": categories,
+            "content": content,  # 내용 추가
+            "author": entry.get('author', source),  # 작성자가 없으면 출처를 작성자로 사용
+            "ai_enhanced": False,  # 아직 AI 처리 안됨
+            "trust_score": 0.5,  # 기본값
+            "sentiment_score": 0,  # 기본값
+            "created_at": datetime.utcnow(),
+            "updated_at": datetime.utcnow(),
+            "is_basic_info": True  # 기본 정보만 있는 상태 표시
+        }
+
+        logger.info(f"✅ 기본 정보 기사 추출 완료: {title[:30]}...")
+        return basic_article
 
     def _process_entry(self, entry: Dict[str, Any], source: str) -> Optional[Dict[str, Any]]:
         """Process a single RSS entry and extract article content with enhanced processing"""
@@ -84,8 +246,15 @@ class RSSCrawler:
         # Check if article already exists in database
         existing = news_collection.find_one({"url": url})
         if existing:
-            logger.debug(f"Article already exists in database: {url}")
-            return None
+            logger.info(f"📋 기사가 이미 DB에 존재합니다: {url}")
+            # 기존 기사도 반환하여 업데이트 기회 제공
+            return {
+                "_id": existing["_id"],
+                "url": url,
+                "title": entry.get('title', '').strip(),
+                "source": source,
+                "existing": True  # 기존 기사임을 표시
+            }
 
         # Extract published date
         published_date = None
@@ -380,8 +549,25 @@ class RSSCrawler:
             "trust_score": trust_score,
             "sentiment_score": sentiment_score,
             "created_at": datetime.utcnow(),
-            "updated_at": datetime.utcnow()
+            "updated_at": datetime.utcnow(),
+            "is_basic_info": False  # 전체 정보 처리 완료 표시
         }
+
+        # 이미 DB에 기본 정보로 저장되어 있다면 업데이트
+        try:
+            update_result = news_collection.update_one(
+                {"_id": _id},
+                {"$set": article}
+            )
+
+            if update_result.modified_count > 0:
+                logger.info(f"🔄 AI 분석 완료 후 기사 업데이트: {title[:30]}...")
+            else:
+                # 업데이트된 것이 없으면 새로 삽입
+                logger.info(f"🆕 AI 분석 완료 기사 신규 저장: {title[:30]}...")
+                news_collection.insert_one(article)
+        except Exception as db_error:
+            logger.error(f"❌ 기사 DB 저장/업데이트 오류: {str(db_error)}")
 
         return article
 
@@ -514,14 +700,31 @@ class RSSCrawler:
         new_count = 0
         for article in articles:
             try:
+                # 기존 기사인 경우 처리 방식 변경
+                if article.get('existing', False):
+                    logger.info(f"🔄 기존 기사 건너뜀: {article.get('title', '제목 없음')[:30]}...")
+                    continue
+
+                # article에서 _id 키 존재 확인
+                if "_id" not in article:
+                    article["_id"] = str(uuid.uuid4())  # 고유 ID 생성
+                    logger.info(f"🆔 새 ID 생성: {article['_id']}")
+
+                logger.info(f"📝 MongoDB에 기사 저장 시도: {article.get('title', '제목 없음')[:30]}...")
+
+                # MongoDB에 저장 시도
                 result = news_collection.update_one(
                     {"_id": article["_id"]},
                     {"$set": article},
                     upsert=True
                 )
                 saved_count += 1
+
                 if result.upserted_id:
                     new_count += 1
+                    logger.info(f"✅ 새 기사 저장 성공: {article.get('title', '제목 없음')[:30]}")
+                else:
+                    logger.info(f"🔄 기존 기사 업데이트: {article.get('title', '제목 없음')[:30]}")
             except Exception as e:
                 logger.error(f"❌ 기사 저장 오류: {e}")
                 if "_id" in article and "title" in article:
@@ -534,8 +737,18 @@ class RSSCrawler:
 
     def crawl_and_save(self) -> int:
         """Fetch RSS feeds, crawl article content, and save to database"""
+        logger.info("📥 RSS 피드 가져오기 시작...")
         articles = self.fetch_rss_feeds()
-        return self.save_articles_to_db(articles)
+        logger.info(f"📄 수집된 기사 수: {len(articles)}개")
+
+        if not articles:
+            logger.warning("⚠️ 수집된 기사가 없습니다. DB 저장 단계 건너뜁니다.")
+            return 0
+
+        logger.info("💾 데이터베이스에 기사 저장 시작...")
+        saved_count = self.save_articles_to_db(articles)
+        logger.info(f"✅ 저장 완료: {saved_count}개 기사가 DB에 저장됨")
+        return saved_count
 
 
 # Helper function to run crawler
@@ -544,8 +757,14 @@ def run_crawler() -> int:
     logger.info("🚀 [크롤러] RSS 수집 시작")
     try:
         crawler = RSSCrawler()
+        logger.info("🔍 크롤러 인스턴스 생성 완료, 크롤링 시작...")
         articles_count = crawler.crawl_and_save()
         logger.info(f"✅ [크롤러] RSS 수집 완료: {articles_count}개 기사 저장됨")
+
+        # 실제 저장된 기사 수 확인
+        db_articles_count = news_collection.count_documents({})
+        logger.info(f"📊 실제 DB 저장 기사 수: {db_articles_count}개")
+
         return articles_count
     except Exception as e:
         logger.error(f"❌ [크롤러] 실행 중 에러 발생: {str(e)}")

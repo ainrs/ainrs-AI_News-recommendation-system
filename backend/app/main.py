@@ -26,6 +26,7 @@ from app.services.model_controller_service import get_model_controller_service
 from app.services.scheduler import get_scheduler_service
 from app.services.hybrid_recommendation import get_hybrid_recommendation_service
 from app.services.system_prompt import get_system_prompt
+from app.services.bert4rec_service import get_bert4rec_service
 
 # 라우터 가져오기
 from app.routers import news, users, admin, recommendation, auth, email_verification
@@ -63,10 +64,11 @@ except Exception as e:
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 개발 환경에서는 모든 출처 허용
+    allow_origins=["http://localhost:3000", "https://localhost:3000", "*"],  # 프론트엔드 URL 명시
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],  # 프론트엔드에 노출할 헤더
 )
 
 # Dependency to get embedding service
@@ -148,6 +150,18 @@ async def startup_event():
         # 직접 크롤러 실행
         article_count = run_crawler()
         logger.info(f"✅ 초기 뉴스 크롤링 완료: {article_count}개 기사 가져옴")
+
+        # BERT4Rec 서비스로 콜드 스타트 추천 데이터 초기화
+        try:
+            bert4rec_service = get_bert4rec_service()
+            bert4rec_service.initialize_cold_start_recommendations()
+            logger.info("✅ 콜드 스타트 추천 데이터 초기화 완료")
+        except Exception as rec_error:
+            logger.error(f"❌ 콜드 스타트 추천 데이터 초기화 실패: {rec_error}")
+
+        # API 엔드포인트 준비 완료 표시
+        # 이렇게 하면 크롤링이 완료된 후에 API 엔드포인트가 응답하기 시작함
+        logger.info("🔌 API 엔드포인트 준비 완료 - 클라이언트 요청 수신 가능")
     except Exception as e:
         logger.error(f"❌ 초기 뉴스 크롤링 실패: {e}")
 
@@ -315,9 +329,10 @@ async def get_news(
         query = {}
         if source:
             query["source"] = source
+
+        # 카테고리 필터링 로직 수정 - 정확히 일치하는 카테고리로 필터링
         if category:
-            # categories 필드가 배열인 경우 $in 연산자를 사용
-            query["categories"] = {"$in": [category]}
+            query["categories"] = category
             logger.info(f"카테고리 필터링: {category}, 쿼리: {query}")
 
         # 데이터베이스 상태 확인
@@ -328,7 +343,7 @@ async def get_news(
         filtered_count = news_collection.count_documents(query)
         logger.info(f"필터링된 뉴스 수: {filtered_count}개")
 
-        # 뉴스 가져오기
+        # 뉴스 가져오기 - 최신순으로 정렬
         news = list(news_collection.find(query).skip(skip).limit(limit).sort("published_date", -1))
         logger.info(f"뉴스 쿼리 결과: {len(news)}개 항목")
 
@@ -338,27 +353,39 @@ async def get_news(
             # 뉴스 데이터가 없으면 크롤러 실행
             if total_news_count == 0:
                 logger.info("뉴스 데이터가 없습니다. 크롤러를 자동으로 실행합니다.")
-                background_tasks = BackgroundTasks()
                 background_tasks.add_task(run_crawler)
 
         result = []
         for item in news:
+            # 필수 필드에 기본값 할당 (유효성 검사 오류 방지)
+            if "image_url" not in item or not item.get("image_url"):
+                item["image_url"] = "https://via.placeholder.com/300x200?text=No+Image"
+
+            if "categories" not in item or not item.get("categories"):
+                item["categories"] = ["인공지능"]
+
+            if "summary" not in item or not item.get("summary"):
+                item["summary"] = item.get("title", "")[:100]
+
+            if "content" not in item or not item.get("content"):
+                item["content"] = item.get("title", "") + " (자세한 내용은 원문을 참조하세요.)"
+
             result.append(NewsResponse(
                 id=item["_id"],
                 title=item["title"],
-                content=item["content"],
+                content=item.get("content", ""),
                 url=item["url"],
                 source=item["source"],
                 published_date=item["published_date"],
-                author=item.get("author"),
+                author=item.get("author", ""),
                 image_url=item.get("image_url"),
                 summary=item.get("summary"),
-                categories=item.get("categories", []),
+                categories=item.get("categories", ["인공지능"]),
                 keywords=item.get("keywords", []),
                 created_at=item["created_at"],
                 updated_at=item["updated_at"],
-                trust_score=item.get("trust_score"),
-                sentiment_score=item.get("sentiment_score"),
+                trust_score=item.get("trust_score", 0.5),
+                sentiment_score=item.get("sentiment_score", 0),
                 metadata=item.get("metadata", {})
             ))
 
@@ -414,7 +441,34 @@ async def get_trending_news(
     """Get trending news articles"""
     logger.info(f"트렌딩 뉴스 요청: limit={limit}")
     try:
+        # 기본 뉴스라도 있는지 확인
+        total_news_count = news_collection.count_documents({})
+        if total_news_count == 0:
+            logger.warning("뉴스 데이터가 없습니다. 빈 목록 반환")
+            return []
+
         trending = await recommendation_service.get_trending_news(limit)
+
+        # 추천 결과가 없는 경우 최신 뉴스로 대체
+        if not trending or len(trending) == 0:
+            logger.info("트렌딩 뉴스가 없습니다. 최신 뉴스로 대체합니다.")
+            recent_news = list(news_collection.find().sort("published_date", -1).limit(limit))
+            trending = []
+
+            for news in recent_news:
+                summary = NewsSummary(
+                    id=news["_id"],
+                    title=news["title"],
+                    source=news["source"],
+                    published_date=news["published_date"],
+                    summary=news.get("summary", ""),
+                    image_url=news.get("image_url", ""),
+                    trust_score=news.get("trust_score", 0.5),
+                    sentiment_score=news.get("sentiment_score", 0),
+                    categories=news.get("categories", [])
+                )
+                trending.append(summary)
+
         logger.info(f"트렌딩 뉴스 응답: {len(trending)}개 항목")
         return trending
     except Exception as e:
@@ -925,6 +979,44 @@ async def analyze_news_sentiment(
         "sentiment_label": result.sentiment_label,
         "model": result.model_name
     }
+
+@app.get("/api/v1/news/cold-start", response_model=List[NewsSummary])
+async def get_cold_start_recommendations(
+    limit: int = 5,
+    bert4rec_service = Depends(get_bert4rec_service)
+):
+    """사용자 데이터가 없는 상태에서 초기 추천을 제공합니다."""
+    logger.info(f"콜드 스타트 추천 요청: limit={limit}")
+    try:
+        # BERT4Rec 서비스를 통해 콜드 스타트 추천 가져오기
+        recommendations = bert4rec_service.get_cold_start_recommendations(limit=limit)
+
+        if not recommendations or len(recommendations) == 0:
+            logger.warning("콜드 스타트 추천이 없습니다. 최신 뉴스로 대체합니다.")
+            recent_news = list(news_collection.find().sort("published_date", -1).limit(limit))
+            recommendations = recent_news
+
+        # 응답 포맷팅
+        result = []
+        for news in recommendations:
+            summary = NewsSummary(
+                id=str(news["_id"]),
+                title=news["title"],
+                source=news.get("source", "Unknown"),
+                published_date=news.get("published_date", datetime.utcnow()),
+                summary=news.get("summary", ""),
+                image_url=news.get("image_url", ""),
+                trust_score=news.get("trust_score", 0.5),
+                sentiment_score=news.get("sentiment_score", 0),
+                categories=news.get("categories", [])
+            )
+            result.append(summary)
+
+        logger.info(f"콜드 스타트 추천 응답: {len(result)}개 항목")
+        return result
+    except Exception as e:
+        logger.error(f"콜드 스타트 추천 처리 중 오류: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error getting news: {str(e)}")
 
 @app.post("/api/v1/text/embeddings")
 async def generate_text_embeddings(

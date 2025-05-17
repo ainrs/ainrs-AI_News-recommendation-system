@@ -65,6 +65,7 @@ langchain-community==0.3.23
 langchain-core==0.3.58
 langchain-openai==0.3.16
 langchain-text-splitters==0.3.8
+langdetect==1.0.9
 langsmith==0.3.42
 markdown-it-py==3.0.0
 MarkupSafe==3.0.2
@@ -104,7 +105,7 @@ posthog==4.0.1
 propcache==0.3.1
 protobuf==5.29.4
 pyasn1==0.4.8
-pyasn1_modules==0.4.2
+pyasn1-modules==0.2.8
 pycparser==2.22
 pydantic==2.11.4
 pydantic-settings==2.9.1

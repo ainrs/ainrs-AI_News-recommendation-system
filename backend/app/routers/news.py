@@ -5,13 +5,40 @@ from bson import ObjectId
 from pydantic import BaseModel
 
 from app.db.mongodb import get_mongodb_database
-from app.services.embedding_service import EmbeddingService
+from app.services.embedding_service import EmbeddingService, get_embedding_service
+from app.services.bert4rec_service import get_bert4rec_service
 from app.services.recommendation_service import RecommendationService
-from app.services.langchain_service import LangChainService
-from app.services.trust_analysis_service import TrustAnalysisService
-from app.services.sentiment_analysis_service import SentimentAnalysisService
+from app.services.langchain_service import LangChainService, get_langchain_service
+from app.services.trust_analysis_service import TrustAnalysisService, get_trust_analysis_service
+from app.services.sentiment_analysis_service import SentimentAnalysisService, get_sentiment_analysis_service
+import re
+import asyncio
+import logging
+from langdetect import detect, LangDetectException
+
+# 로깅 설정
+logger = logging.getLogger(__name__)
+
+# 로깅 설정
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/news", tags=["news"])
+
+# 고급 분석 및 임베딩 처리를 위한 의존성 주입 함수들
+def get_langchain_service_dep():
+    return get_langchain_service()
+
+def get_embedding_service_dep():
+    return get_embedding_service()
+
+def get_bert4rec_service_dep():
+    return get_bert4rec_service()
+
+def get_trust_analysis_service_dep():
+    return get_trust_analysis_service()
+
+def get_sentiment_analysis_service_dep():
+    return get_sentiment_analysis_service()
 
 # 댓글 관련 모델
 class CommentCreate(BaseModel):
@@ -28,6 +55,220 @@ class CommentResponse(BaseModel):
     created_at: datetime
     likes: int = 0
     replies: Optional[List["CommentResponse"]] = None
+
+# 기사 상세 조회 엔드포인트 (사용자가 기사 클릭 시 호출)
+@router.get("/{news_id}", response_model=Dict[str, Any])
+async def get_news_detail(
+    news_id: str,
+    user_id: Optional[str] = Query(None),
+    db = Depends(get_mongodb_database),
+    langchain_service = Depends(get_langchain_service_dep),
+    embedding_service = Depends(get_embedding_service_dep),
+    bert4rec_service = Depends(get_bert4rec_service_dep),
+    trust_service = Depends(get_trust_analysis_service_dep),
+    sentiment_service = Depends(get_sentiment_analysis_service_dep)
+):
+    """
+    뉴스 상세 정보를 가져옵니다.
+    사용자가 뉴스를 클릭할 때 호출되며, 필요한 경우 고급 AI 분석을 수행합니다.
+    """
+    try:
+        # 뉴스 존재 확인
+        news_collection = db["news"]
+
+        # ObjectId로 변환 시도
+        try:
+            news_id_obj = ObjectId(news_id)
+            news = await news_collection.find_one({"_id": news_id_obj})
+        except:
+            # 실패하면 문자열 ID로 시도
+            news = await news_collection.find_one({"_id": news_id})
+
+        if not news:
+            raise HTTPException(status_code=404, detail="News not found")
+
+        # 조회수 증가 및 상호작용 기록
+        if user_id:
+            # 사용자 상호작용 기록
+            interaction_data = {
+                "user_id": user_id,
+                "news_id": str(news["_id"]),
+                "type": "view",
+                "created_at": datetime.utcnow()
+            }
+
+            # 상호작용 저장
+            interaction_collection = db["user_interactions"]
+            await interaction_collection.insert_one(interaction_data)
+
+            # 뉴스 조회수 증가
+            await news_collection.update_one(
+                {"_id": news["_id"]},
+                {"$inc": {"view_count": 1}}
+            )
+
+        # 뉴스가 기본 정보만 있는 경우 (is_basic_info=True) 고급 AI 분석 수행
+        if news.get("is_basic_info", False) and news.get("content"):
+            try:
+                # 분석 시작 로그
+                logger.info(f"🔍 기사 ID {news_id}에 대한 고급 분석 시작")
+
+                # 기사의 제목과 내용을 가져옴
+                title = news.get("title", "")
+                content = news.get("content", "")
+
+                if len(content) >= 300:  # 콘텐츠 길이가 충분한 경우만 AI 처리
+                    # 1. 언어 감지 - 최적의 임베딩 모델 선택을 위해
+                    detected_lang = "ko"  # 기본값은 한국어
+                    try:
+                        # 본문 일부만 사용하여 언어 감지 (효율성)
+                        sample_text = content[:1000]
+                        detected_lang = detect(sample_text)
+                        logger.info(f"감지된 언어: {detected_lang}")
+                    except LangDetectException:
+                        logger.warning("언어 감지 실패, 기본값(한국어)으로 설정")
+
+                    # 2. 병렬로 여러 분석 작업 실행
+                    # 병렬 처리를 위한 태스크 생성
+                    tasks = []
+
+                    # 2.1 LangChain 분석 (요약, 키워드 추출 등)
+                    tasks.append(asyncio.create_task(
+                        asyncio.to_thread(
+                            langchain_service.analyze_news_sync,
+                            title,
+                            content
+                        )
+                    ))
+
+                    # 2.2 임베딩 생성 (언어에 맞는 모델 사용)
+                    embedding_model = "news-ko"  # 기본 한국어 모델
+                    if detected_lang in ["en", "de", "fr", "es", "it"]:
+                        embedding_model = "multilingual"  # 서양어는 다국어 모델
+
+                    tasks.append(asyncio.create_task(
+                        asyncio.to_thread(
+                            embedding_service.get_embedding_with_model,
+                            content,
+                            embedding_model
+                        )
+                    ))
+
+                    # 2.3 신뢰도 분석
+                    tasks.append(asyncio.create_task(
+                        asyncio.to_thread(
+                            trust_service.analyze_trust,
+                            title,
+                            content,
+                            news.get("source", "")
+                        )
+                    ))
+
+                    # 2.4 감정 분석
+                    tasks.append(asyncio.create_task(
+                        asyncio.to_thread(
+                            sentiment_service.analyze_sentiment,
+                            content
+                        )
+                    ))
+
+                    # 모든 작업 대기
+                    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+                    # 결과 파싱
+                    ai_result = results[0] if not isinstance(results[0], Exception) else {"error": str(results[0])}
+                    embedding_result = results[1] if not isinstance(results[1], Exception) else None
+                    trust_result = results[2] if not isinstance(results[2], Exception) else None
+                    sentiment_result = results[3] if not isinstance(results[3], Exception) else None
+
+                    # 분석 결과가 있으면 업데이트할 데이터 준비
+                    update_data = {
+                        "is_basic_info": False,  # 완전히 처리된 상태로 표시
+                        "updated_at": datetime.utcnow(),
+                        "analyzed_at": datetime.utcnow(),
+                        "language": detected_lang
+                    }
+
+                    # AI 분석 결과 적용
+                    if not "error" in ai_result:
+                        # 요약 적용
+                        update_data["summary"] = ai_result.get("summary", "")
+                        update_data["keywords"] = ai_result.get("keywords", [])
+                        update_data["ai_enhanced"] = True
+
+                    # 신뢰도 점수 계산 및 저장
+                    if trust_result:
+                        trust_score = trust_result.get("score", 0.5)
+                        update_data["trust_score"] = trust_score
+                        update_data["trust_factors"] = trust_result.get("factors", [])
+                    else:
+                        # LangChain 결과에서 신뢰도 대체 추출
+                        update_data["trust_score"] = min(1.0, float(ai_result.get("importance", 5)) / 10.0)
+
+                    # 감정 분석 결과 저장
+                    if sentiment_result:
+                        sentiment_score = sentiment_result.get("score", 0)
+                        update_data["sentiment_score"] = sentiment_score
+                        update_data["sentiment_label"] = sentiment_result.get("label", "neutral")
+                    else:
+                        # LangChain 결과에서 감정 라벨 대체 추출
+                        sentiment_label = ai_result.get("sentiment", "neutral")
+                        sentiment_score = 0
+                        if sentiment_label == "positive":
+                            sentiment_score = 0.7
+                        elif sentiment_label == "negative":
+                            sentiment_score = -0.7
+                        update_data["sentiment_score"] = sentiment_score
+                        update_data["sentiment_label"] = sentiment_label
+
+                    # 임베딩 결과가 있으면 저장
+                    if embedding_result is not None and len(embedding_result) > 0:
+                        # 임베딩 저장
+                        embedding_doc = {
+                            "news_id": str(news["_id"]),
+                            "embedding": embedding_result,
+                            "model": embedding_model,
+                            "created_at": datetime.utcnow()
+                        }
+                        try:
+                            await db["embeddings"].insert_one(embedding_doc)
+                            update_data["has_embedding"] = True
+                            update_data["embedding_model"] = embedding_model
+                        except Exception as e:
+                            logger.error(f"임베딩 저장 중 오류: {str(e)}")
+
+                    # 기사 업데이트
+                    await news_collection.update_one(
+                        {"_id": news["_id"]},
+                        {"$set": update_data}
+                    )
+
+                    # BERT4Rec 모델에 기사 정보 추가
+                    if user_id:
+                        try:
+                            bert4rec_service.add_interaction(user_id, str(news["_id"]), "view")
+                        except Exception as e:
+                            logger.error(f"BERT4Rec 상호작용 추가 중 오류: {str(e)}")
+
+                    # 업데이트된 결과 가져오기
+                    if isinstance(news["_id"], ObjectId):
+                        news = await news_collection.find_one({"_id": news["_id"]})
+                    else:
+                        news = await news_collection.find_one({"_id": news["_id"]})
+
+                    logger.info(f"✅ 기사 ID {news_id} 고급 분석 완료")
+            except Exception as e:
+                logger.error(f"AI 분석 중 오류: {str(e)}")
+                # 오류가 발생해도 기존 뉴스 데이터 반환
+
+        # MongoDB _id를 문자열로 변환
+        if "_id" in news and isinstance(news["_id"], ObjectId):
+            news["_id"] = str(news["_id"])
+
+        return news
+    except Exception as e:
+        logger.error(f"뉴스 상세 정보 가져오기 오류: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error getting news: {str(e)}")
 
 # 댓글 엔드포인트
 @router.get("/{news_id}/comments", response_model=List[CommentResponse])

@@ -81,66 +81,244 @@ class ContentProcessor:
     def extract_main_content(self, html_content: str) -> Tuple[str, List[Dict[str, str]]]:
         """
         HTML에서 주요 콘텐츠와 이미지를 추출합니다.
+        고급 파싱 기법으로 더 정확하고 안정적인 추출을 수행합니다.
         """
         try:
-            soup = BeautifulSoup(html_content, 'html.parser')
+            # html_content 유효성 검사
+            if html_content is None or not isinstance(html_content, str) or not html_content.strip():
+                logger.warning("HTML 콘텐츠가 없거나 유효하지 않습니다.")
+                return "", []
+
+            # 안정적인 파싱을 위해 lxml 파서 사용 (더 빠르고 견고함)
+            try:
+                from lxml import etree
+                soup = BeautifulSoup(html_content, 'lxml')
+            except ImportError:
+                # lxml이 설치되지 않은 경우 기본 파서 사용
+                soup = BeautifulSoup(html_content, 'html.parser')
+                logger.info("lxml 패키지가 없어 html.parser를 사용합니다.")
 
             # 메인 콘텐츠 후보들
             content_candidates = []
 
-            # 1. article 태그 확인
-            article = soup.find('article')
-            if article:
-                content_candidates.append((article, len(article.get_text())))
+            # 고급 콘텐츠 추출을 위한 readability 라이브러리 시도
+            try:
+                from readability import Document
+                doc = Document(html_content)
+                readable_html = doc.summary()
+                readable_soup = BeautifulSoup(readable_html, 'lxml' if 'lxml' in str(soup.__class__) else 'html.parser')
+                # readability가 추출한 컨텐츠를 최우선 후보로 추가
+                if readable_soup.text and len(readable_soup.text.strip()) > 100:
+                    content_candidates.append((readable_soup, len(readable_soup.text) * 1.5))  # 가중치 부여
+            except ImportError:
+                logger.info("readability 라이브러리가 없어 고급 콘텐츠 추출을 건너뜁니다.")
+            except Exception as e:
+                logger.warning(f"readability 처리 중 오류: {e}")
 
-            # 2. 일반적인 콘텐츠 컨테이너 확인
-            for selector in ['.article-content', '.entry-content', '.post-content', '.story-content', '.news-content', 'main', '.main-content']:
-                containers = soup.select(selector)
-                for container in containers:
-                    content_candidates.append((container, len(container.get_text())))
+            # 1. article 태그 확인 (가장 일반적인 뉴스 컨테이너)
+            articles = soup.find_all('article')
+            for article in articles:
+                if article and article.text and len(article.text.strip()) > 100:
+                    content_candidates.append((article, len(article.text)))
 
-            # 3. 텍스트 콘텐츠가 가장 많은 div 확인
+            # 2. 일반적인 콘텐츠 컨테이너 확인 (다양한 사이트의 일반적인 클래스 포함)
+            for selector in [
+                '.article-content', '.entry-content', '.post-content', '.story-content',
+                '.news-content', '.article-body', '.content-body', '.story-body',
+                '.article__body', '.article__content', '.post__content', '.post-body',
+                'main', '.main-content', '.main-article', '#content', '#main-content'
+            ]:
+                try:
+                    containers = soup.select(selector)
+                    for container in containers:
+                        if container and hasattr(container, 'get_text') and container.get_text().strip():
+                            content_candidates.append((container, len(container.get_text())))
+                except Exception as e:
+                    logger.debug(f"선택자 '{selector}' 처리 중 오류: {e}")
+
+            # 3. 텍스트 콘텐츠가 가장 많은 div 확인 (더 정교한 방식으로)
             divs = soup.find_all('div')
             for div in divs:
-                if len(div.find_all('p')) > 3:  # 최소 3개 이상의 문단이 있는 경우
-                    content_candidates.append((div, len(div.get_text())))
+                try:
+                    # 텍스트 내용이 있는 p 태그 개수 확인
+                    p_tags = div.find_all('p')
+                    text_p_tags = [p for p in p_tags if p.text.strip()]
 
-            # 콘텐츠가 가장 많은 요소 선택
-            content_candidates.sort(key=lambda x: x[1], reverse=True)
+                    # 최소 3개 이상의 문단이 있고, 전체 텍스트가 일정 길이 이상인 경우
+                    if len(text_p_tags) >= 3 and len(div.get_text().strip()) > 200:
+                        # 중첩된 div를 피하기 위해 부모-자식 관계 확인
+                        parent_divs = [candidate[0] for candidate in content_candidates if candidate[0].name == 'div']
+                        is_child = any(div in parent_div.find_all('div', recursive=True) for parent_div in parent_divs)
+
+                        if not is_child:  # 이미 추가된 div의 자식이 아닌 경우만 추가
+                            content_candidates.append((div, len(div.get_text())))
+                except Exception as e:
+                    logger.debug(f"div 처리 중 오류: {e}")
+
+            # 콘텐츠 품질 점수 계산 및 정렬
+            scored_candidates = []
+            for element, text_length in content_candidates:
+                try:
+                    # 기본 점수는 텍스트 길이
+                    score = text_length
+
+                    # p 태그 수에 따른 가중치 (더 많은 p 태그는 더 좋은 컨텐츠를 의미할 수 있음)
+                    p_count = len(element.find_all('p'))
+                    score += p_count * 10
+
+                    # 제목 태그(h1, h2 등)가 있으면 가중치 부여
+                    headings = len(element.find_all(['h1', 'h2', 'h3', 'h4']))
+                    score += headings * 50
+
+                    # 이미지가 있으면 가중치 부여
+                    images = len(element.find_all('img'))
+                    score += images * 30
+
+                    scored_candidates.append((element, score))
+                except Exception as e:
+                    logger.debug(f"점수 계산 중 오류: {e}")
+                    scored_candidates.append((element, text_length))  # 오류 시 원래 점수 사용
+
+            # 점수가 높은 순으로 정렬
+            scored_candidates.sort(key=lambda x: x[1], reverse=True)
 
             main_content_html = ""
-            if content_candidates:
-                main_content_element = content_candidates[0][0]
+
+            # 변수명이 변경되었으므로 수정
+            if scored_candidates:
+                # 최고 점수 후보 선택
+                main_content_element = scored_candidates[0][0]
+
+                # 불필요한 요소 제거 후 HTML 추출
+                for tag in main_content_element.find_all(['script', 'style', 'iframe', 'ins', 'footer', 'nav']):
+                    tag.decompose()
+
+                # 광고 관련 클래스 제거
+                for tag in main_content_element.find_all(class_=lambda c: c and any(ad in c.lower() for ad in ['ad', 'banner', 'sponsor', 'popup', 'subscribe'])):
+                    tag.decompose()
+
                 main_content_html = str(main_content_element)
             else:
-                # 후보가 없으면 전체 본문의 p 태그만 수집
-                paragraphs = soup.find_all('p')
-                if paragraphs:
-                    main_content_html = ''.join(str(p) for p in paragraphs)
-                else:
-                    main_content_html = str(soup.body) if soup.body else str(soup)
+                # 백업 메커니즘: 후보가 없으면 더 일반적인 방법으로 시도
+                try:
+                    # 1. newspaper3k 라이브러리 사용 시도
+                    try:
+                        from newspaper import fulltext
+                        text = fulltext(html_content)
+                        if text and len(text) > 200:
+                            return text, self._extract_images(soup)
+                    except ImportError:
+                        logger.info("newspaper3k 라이브러리가 없어 건너뜁니다.")
+                    except Exception as e:
+                        logger.debug(f"newspaper3k 처리 중 오류: {e}")
+
+                    # 2. p 태그만 수집
+                    paragraphs = soup.find_all('p')
+                    if paragraphs:
+                        # 너무 짧은 p 태그는 제외 (메뉴, 저작권 등)
+                        valid_p_tags = [p for p in paragraphs if len(p.text.strip()) > 20]
+                        if valid_p_tags:
+                            main_content_html = ''.join(str(p) for p in valid_p_tags)
+                        else:
+                            main_content_html = ''.join(str(p) for p in paragraphs)
+                    else:
+                        # 3. 마지막 수단: body 또는 전체 HTML
+                        main_content_html = str(soup.body) if soup.body else str(soup)
+                except Exception as e:
+                    logger.error(f"백업 콘텐츠 추출 중 오류: {e}")
+                    main_content_html = html_content  # 원본 반환
 
             # 이미지 추출
-            images = []
+            images = self._extract_images(soup)
+
+            # HTML2Text로 변환
+            markdown_content = self.html_converter.handle(main_content_html)
+
+            return markdown_content, images
+        except Exception as e:
+            logger.error(f"메인 콘텐츠 추출 중 오류 발생: {e}")
+            return "", []
+
+    def _extract_images(self, soup):
+        """
+        HTML에서 이미지를 추출하는 내부 헬퍼 함수
+        """
+        images = []
+        try:
             for img in soup.find_all('img'):
-                if img.get('src'):
-                    src = img.get('src')
-                    alt = img.get('alt', '')
+                try:
+                    if img.get('src'):
+                        src = img.get('src')
+                        alt = img.get('alt', '')
+                        title = img.get('title', '')
+                        width = img.get('width', 0)
+                        height = img.get('height', 0)
 
-                    # 이미지 URL이 상대 경로인 경우 처리
-                    if not bool(urlparse(src).netloc):
-                        # base_url이 있다고 가정
-                        base_url = getattr(soup, '_base_url', '')
-                        if base_url:
-                            src = urljoin(base_url, src)
+                        # 이미지 URL이 상대 경로인 경우 처리
+                        if not bool(urlparse(src).netloc):
+                            # base_url 확인
+                            base_tags = soup.find_all('base', href=True)
+                            base_url = base_tags[0]['href'] if base_tags else getattr(soup, '_base_url', '')
+                            if base_url:
+                                src = urljoin(base_url, src)
 
-                    # 유효한 이미지 확장자 확인
-                    _, ext = os.path.splitext(src.split('?')[0])
-                    if ext.lower() in self.valid_image_extensions:
-                        images.append({
-                            'src': src,
-                            'alt': alt
-                        })
+                        # 이미지 크기가 너무 작으면 아이콘이나 버튼일 가능성이 높음
+                        try:
+                            w = int(width) if width else 0
+                            h = int(height) if height else 0
+                            if w > 0 and h > 0 and (w < 50 or h < 50):
+                                continue
+                        except (ValueError, TypeError):
+                            pass
+
+                        # 유효한 이미지 확장자 확인
+                        _, ext = os.path.splitext(src.split('?')[0])
+                        if ext.lower() in self.valid_image_extensions:
+                            # 중복 이미지 제거
+                            if not any(img_info['src'] == src for img_info in images):
+                                images.append({
+                                    'src': src,
+                                    'alt': alt,
+                                    'title': title
+                                })
+                except Exception as e:
+                    logger.debug(f"이미지 처리 중 오류: {e}")
+                    continue  # 한 이미지의 오류가 전체 처리를 멈추지 않도록
+
+            # 크고 중요한 이미지를 더 우선적으로 선택 (데이터 속성 점수 부여)
+            for i, img_info in enumerate(images):
+                try:
+                    src = img_info['src']
+                    # 'featured', 'hero', 'main' 등의 키워드가 포함된 이미지는 더 높은 점수
+                    score = 0
+                    keywords = ['featured', 'hero', 'main', 'lead', 'thumbnail', 'cover']
+                    if any(kw in src.lower() for kw in keywords):
+                        score += 10
+                    # 'logo', 'icon', 'button' 등의 키워드가 포함된 이미지는 낮은 점수
+                    negative = ['logo', 'icon', 'button', 'banner', 'ad', 'avatar']
+                    if any(kw in src.lower() for kw in negative):
+                        score -= 10
+                    # 파일명이 숫자만인 경우 (일반적으로 중요한 이미지)
+                    filename = os.path.basename(src.split('?')[0])
+                    name, _ = os.path.splitext(filename)
+                    if name.isdigit() and len(name) > 4:
+                        score += 5
+
+                    img_info['score'] = score
+                except:
+                    img_info['score'] = 0
+
+            # 점수로 정렬하고 상위 이미지만 유지
+            images.sort(key=lambda x: x.get('score', 0), reverse=True)
+            # 점수 필드 제거
+            for img in images:
+                if 'score' in img:
+                    del img['score']
+
+            return images
+        except Exception as e:
+            logger.error(f"이미지 추출 중 오류: {e}")
+            return []
 
             # HTML2Text로 변환
             markdown_content = self.html_converter.handle(main_content_html)
