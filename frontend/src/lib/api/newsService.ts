@@ -43,6 +43,21 @@ export const newsService = {
   },
 
   /**
+   * 콜드 스타트 추천 뉴스를 가져옵니다.
+   * 사용자 정보가 없거나 새로운 사용자를 위한 추천입니다.
+   */
+  getColdStartRecommendations: async (limit = 5): Promise<NewsSummary[]> => {
+    try {
+      // 콜드 스타트 추천 API 호출
+      return await apiClient.news.getColdStartRecommendations(limit);
+    } catch (error) {
+      console.error('콜드 스타트 추천을 가져오는 중 오류 발생:', error);
+      // 실패 시 트렌딩 뉴스로 대체
+      return await newsService.getTrendingNews(limit);
+    }
+  },
+
+  /**
    * 특정 뉴스를 ID로 가져옵니다.
    */
   getNewsById: async (id: string): Promise<News | null> => {

@@ -78,6 +78,48 @@ async function fetchApi<T = unknown>(
 }
 
 /**
+ * 자동 재시도 기능이 있는 API 요청 함수
+ * 백엔드 서버가 시작 중이거나 일시적으로 연결할 수 없는 경우에 유용
+ */
+async function fetchApiWithRetry<T = unknown>(
+  endpoint: string,
+  options: RequestInit = {},
+  maxRetries = 3,
+  retryDelay = 2000
+): Promise<T> {
+  let lastError: Error | null = null;
+
+  // 재시도 횟수만큼 반복
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      // 첫 시도가 아니면 잠시 대기
+      if (attempt > 0) {
+        console.log(`🔄 API 요청 재시도 ${attempt}/${maxRetries}: ${endpoint}`);
+        await new Promise(resolve => setTimeout(resolve, retryDelay));
+      }
+
+      // API 호출 시도
+      return await fetchApi<T>(endpoint, options);
+    } catch (error) {
+      // 오류 저장
+      lastError = error instanceof Error ? error : new Error('알 수 없는 오류');
+
+      // 연결 거부 오류인 경우만 재시도 (서버가 준비 중)
+      if (lastError.message.includes('Failed to fetch')) {
+        // 마지막 시도가 아니면 계속 진행
+        if (attempt < maxRetries) continue;
+      } else {
+        // 다른 오류는 바로 실패 처리
+        break;
+      }
+    }
+  }
+
+  // 모든 시도 실패 시
+  throw lastError;
+}
+
+/**
  * API 클라이언트
  */
 export const apiClient = {
@@ -216,7 +258,8 @@ export const apiClient = {
 
       const query = queryParams.toString();
       try {
-        return await fetchApi<News[]>(`/news?${query}`);
+        // 재시도 로직 사용 (최대 3번, 2초 간격)
+        return await fetchApiWithRetry<News[]>(`/news?${query}`, {}, 3, 2000);
       } catch (error) {
         console.error('뉴스 목록을 가져오는 중 오류:', error);
         return [];
@@ -251,14 +294,30 @@ export const apiClient = {
     },
 
     /**
-     * 트렌딩 뉴스 가져오기
+     * 트렌딩 뉴스 가져오기 (자동 재시도 포함)
      */
     getTrending: async (limit = 10): Promise<NewsSummary[]> => {
       try {
-        return await fetchApi<NewsSummary[]>(`/news/trending?limit=${limit}`);
+        // 재시도 로직 사용 (최대 3번, 2초 간격)
+        return await fetchApiWithRetry<NewsSummary[]>(`/news/trending?limit=${limit}`, {}, 3, 2000);
       } catch (error) {
         console.error('트렌딩 뉴스를 가져오는 중 오류:', error);
         return [];
+      }
+    },
+
+    /**
+     * 콜드 스타트 추천 뉴스 가져오기 (자동 재시도 포함)
+     * 사용자 데이터나 상호작용이 없을 때도 다양한 뉴스를 추천
+     */
+    getColdStartRecommendations: async (limit = 5): Promise<NewsSummary[]> => {
+      try {
+        // 재시도 로직 사용 (최대 3번, 2초 간격)
+        return await fetchApiWithRetry<NewsSummary[]>(`/news/cold-start?limit=${limit}`, {}, 3, 2000);
+      } catch (error) {
+        console.error('콜드 스타트 추천 뉴스를 가져오는 중 오류:', error);
+        // 오류 시 트렌딩 뉴스로 폴백
+        return await apiClient.news.getTrending(limit);
       }
     },
 

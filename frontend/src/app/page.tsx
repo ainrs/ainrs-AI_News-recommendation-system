@@ -16,28 +16,53 @@ import RelatedNewsSection from "@/components/RelatedNewsSection";
 import LoginForm from "@/components/LoginForm";
 import { apiClient } from "@/lib/api/client";
 import { useAuth } from "@/lib/auth/authContext";
+import { newsService } from "@/lib/api/newsService";
 
 export default function Home() {
   const { user, isAuthenticated, isLoading } = useAuth();
 
   // 첫 번째 뉴스 아이템 ID 상태
   const [firstNewsId, setFirstNewsId] = useState<string>("");
+  // 콜드 스타트 추천 뉴스 상태
+  const [coldStartRecommendations, setColdStartRecommendations] = useState<any[]>([]);
+  // 콜드 스타트 로딩 상태
+  const [coldStartLoading, setColdStartLoading] = useState<boolean>(false);
 
-  // 첫 번째 뉴스 아이템 ID를 가져오기 위한 API 호출
+  // 첫 번째 뉴스 아이템 ID 및 콜드 스타트 추천을 가져오기 위한 API 호출
   useEffect(() => {
-    async function fetchFirstNewsId() {
+    async function fetchInitialData() {
       try {
-        // 첫 번째 뉴스 가져오기
-        const newsItems = await apiClient.news.getAll({ limit: 1 });
-        if (newsItems && newsItems.length > 0) {
-          setFirstNewsId(newsItems[0]._id || newsItems[0].id || "");
+        // 콜드 스타트 추천 호출 상태 설정
+        setColdStartLoading(true);
+
+        // 병렬로 첫 번째 뉴스와 콜드 스타트 추천 요청
+        const [newsItemsPromise, coldStartPromise] = await Promise.allSettled([
+          // 첫 번째 뉴스 가져오기
+          apiClient.news.getAll({ limit: 1 }),
+          // 콜드 스타트 추천 가져오기
+          newsService.getColdStartRecommendations(5)
+        ]);
+
+        // 첫 번째 뉴스 처리
+        if (newsItemsPromise.status === 'fulfilled' && newsItemsPromise.value && newsItemsPromise.value.length > 0) {
+          setFirstNewsId(newsItemsPromise.value[0]._id || newsItemsPromise.value[0].id || "");
+        }
+
+        // 콜드 스타트 추천 처리
+        if (coldStartPromise.status === 'fulfilled' && coldStartPromise.value) {
+          setColdStartRecommendations(coldStartPromise.value);
+          console.log("콜드 스타트 추천 로드 완료:", coldStartPromise.value.length);
+        } else {
+          console.warn("콜드 스타트 추천 로드 실패:", coldStartPromise);
         }
       } catch (error) {
-        console.error("첫 번째 뉴스 ID를 가져오는 중 오류:", error);
+        console.error("초기 데이터를 가져오는 중 오류:", error);
+      } finally {
+        setColdStartLoading(false);
       }
     }
 
-    fetchFirstNewsId();
+    fetchInitialData();
   }, []);
 
   // 로그인 폼 표시 여부 상태
@@ -163,11 +188,13 @@ export default function Home() {
               <TrendingNewsSection />
 
               {/* 맞춤 추천 뉴스 */}
-              {(user || firstNewsId) && (
+              {(user || firstNewsId || coldStartRecommendations.length > 0) && (
                 <>
                   <RecommendedNewsSection
                     userId={user?.id || firstNewsId}
                     limit={5}
+                    fallbackData={coldStartRecommendations}
+                    isColdStartLoading={coldStartLoading}
                   />
 
                   {/* 관련 뉴스 */}

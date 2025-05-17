@@ -19,26 +19,68 @@ interface RecommendedNewsProps {
   title?: string;
   userId: string;
   limit?: number;
+  fallbackData?: any[]; // 콜드 스타트 추천 데이터
+  isColdStartLoading?: boolean; // 콜드 스타트 로딩 상태
 }
 
 export default function RecommendedNewsSection({
   title = '맞춤 추천',
   userId,
-  limit = 5
+  limit = 5,
+  fallbackData = [],
+  isColdStartLoading = false
 }: RecommendedNewsProps) {
   const [news, setNews] = useState<NewsForDisplay[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
-  const [recommendationType, setRecommendationType] = useState<'collaborative' | 'personalized' | 'latest'>('latest'); // 기본값을 'latest'로 변경
+  const [recommendationType, setRecommendationType] = useState<'collaborative' | 'personalized' | 'latest' | 'coldstart'>('latest'); // 기본값을 'latest'로 변경
+  const [usedFallback, setUsedFallback] = useState<boolean>(false); // 폴백 데이터를 사용했는지 여부
 
   useEffect(() => {
-    if (userId) {
+    // 사용자 ID가 있거나 콜드 스타트 추천이 선택된 경우 추천을 가져옴
+    if (userId || recommendationType === 'coldstart') {
       fetchRecommendations();
     }
   }, [userId, limit, recommendationType]);
 
+  // 폴백 데이터가 변경되면 오류 상태에서 자동으로 폴백 데이터를 사용
+  useEffect(() => {
+    if (fallbackData && fallbackData.length > 0 && (error || news.length === 0) && !usedFallback) {
+      console.log('콜드 스타트 폴백 데이터 사용:', fallbackData.length);
+      const formattedFallback = formatNewsData(fallbackData);
+      setNews(formattedFallback);
+      setUsedFallback(true);
+      setError(null);
+      setLoading(false);
+    }
+  }, [fallbackData, error, usedFallback]);
+
+  // 결과를 NewsForDisplay 형식으로 변환하는 함수
+  const formatNewsData = (data: any[]): NewsForDisplay[] => {
+    return data.map((item: any) => ({
+      id: item.id || item._id,
+      title: item.title,
+      content: item.content || '',
+      summary: item.summary || '',
+      source: item.source,
+      publishedDate: new Date(item.published_date).toLocaleDateString('ko-KR', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+      }),
+      author: item.author || '',
+      imageUrl: item.image_url || '',
+      categories: item.categories || [],
+      url: item.url || '',
+      trustScore: item.trust_score || 0,
+      sentimentScore: item.sentiment_score || 0,
+      recommendationScore: item.recommendation_score,
+      recommendationReason: item.recommendation_reason || "추천 시스템에서 선택한 콘텐츠",
+    }));
+  };
+
   const fetchRecommendations = async () => {
-    if (!userId) return;
+    if (!userId && recommendationType !== 'coldstart') return;
 
     setLoading(true);
     try {
@@ -53,6 +95,10 @@ export default function RecommendedNewsSection({
           // 개인화 추천
           recommendedNews = await apiClient.users.getRecommendations(userId, limit);
           break;
+        case 'coldstart':
+          // 콜드 스타트 추천
+          recommendedNews = await apiClient.news.getColdStartRecommendations(limit);
+          break;
         case 'latest':
         default:
           // 최신 뉴스 (기본값)
@@ -60,27 +106,17 @@ export default function RecommendedNewsSection({
           break;
       }
 
+      // 결과가 없으면 폴백 데이터 사용
+      if (!recommendedNews || recommendedNews.length === 0) {
+        if (fallbackData && fallbackData.length > 0 && !usedFallback) {
+          console.log('API 응답이 비어있어 콜드 스타트 폴백 데이터 사용');
+          recommendedNews = fallbackData;
+          setUsedFallback(true);
+        }
+      }
+
       // 결과를 NewsForDisplay 형식으로 변환
-      const formattedNews = recommendedNews.map((item: any) => ({
-        id: item.id || item._id,
-        title: item.title,
-        content: item.content || '',
-        summary: item.summary || '',
-        source: item.source,
-        publishedDate: new Date(item.published_date).toLocaleDateString('ko-KR', {
-          year: 'numeric',
-          month: 'long',
-          day: 'numeric',
-        }),
-        author: item.author || '',
-        imageUrl: item.image_url || '',
-        categories: item.categories || [],
-        url: item.url || '',
-        trustScore: item.trust_score || 0,
-        sentimentScore: item.sentiment_score || 0,
-        recommendationScore: item.recommendation_score,
-        recommendationReason: item.recommendation_reason,
-      }));
+      const formattedNews = formatNewsData(recommendedNews);
 
       setNews(formattedNews);
       setError(null);
@@ -165,6 +201,16 @@ export default function RecommendedNewsSection({
             }`}
           >
             맞춤 추천
+          </button>
+          <button
+            onClick={() => handleChangeRecommendationType('coldstart')}
+            className={`px-3 py-1 rounded ${
+              recommendationType === 'coldstart'
+                ? 'bg-[hsl(var(--variety-blue))] text-white'
+                : 'bg-gray-100'
+            }`}
+          >
+            빠른추천
           </button>
           <button
             onClick={() => handleChangeRecommendationType('latest')}
