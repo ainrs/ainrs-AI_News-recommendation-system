@@ -474,7 +474,7 @@ async def get_trending_news(
 
             for news in recent_news:
                 summary = NewsSummary(
-                    id=news["_id"],
+                    id=str(news["_id"]),
                     title=news["title"],
                     source=news["source"],
                     published_date=news["published_date"],

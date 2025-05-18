@@ -163,7 +163,7 @@ async def get_trending_recommendations_main(
         recommendation_service = get_recommendation_service()
         trending_news = await recommendation_service.get_trending_news(limit=limit)
         return [{
-            "id": news.id,
+            "id": str(news.id),
             "title": news.title,
             "source": news.source,
             "published_date": news.published_date,
@@ -195,7 +195,7 @@ async def get_trending_recommendations_news_legacy(
     try:
         trending_news = await recommendation_service.get_trending_news(limit=limit)
         return [{
-            "id": news.id,
+            "id": str(news.id),
             "title": news.title,
             "source": news.source,
             "published_date": news.published_date,

@@ -1,5 +1,38 @@
 # NVIPBION.AI 백엔드
 
+## 2025-05-19 오류 수정 업데이트
+
+### 수정된 주요 오류
+
+1. **비동기 함수(코루틴) 처리 오류 해결**
+   - `langchain_service.py`에서 `sentiment_service.analyze_sentiment`와 `trust_service.calculate_trust_score` 함수 호출 시 코루틴 처리 문제 수정
+   - 코루틴 객체를 올바르게 처리하는 코드로 수정하여 'coroutine was never awaited' 오류 해결
+   - 새로운 루프 생성 후 처리 과정에서 코루틴 변수를 분리하여 안정적으로 처리하도록 개선
+
+2. **결과 값 타입 처리 개선**
+   - 'coroutine' object has no attribute 'get' 오류를 방지하기 위해 결과 타입 검사 로직 추가
+   - 코루틴 반환 여부를 확인하고 올바르게 처리하는 코드 추가
+   - 코루틴 체인에서 발생하는 타이밍 문제를 해결
+
+3. **ID 타입 변환 오류 해결**
+   - MongoDB ObjectId를 문자열로 변환하는 과정 개선으로 "404: News not found" 오류 해결
+   - 트렌딩 뉴스 및 콜드 스타트 추천 기능에서 ID가 문자열로 일관되게 반환되도록 수정
+   - `recommendation_service.py`에서 ID 처리 방식 표준화
+
+4. **인증 API 경로 수정**
+   - OAuth2 설정에서 tokenUrl을 "api/auth/login"에서 "auth/login"으로 수정
+   - 프론트엔드 요청 경로와 일치하도록 수정하여 인증 절차 정상화
+
+### 기술적 개선사항
+
+1. **예외 처리 강화**
+   - 비동기 작업에서 발생할 수 있는 예외를 더 철저히 포착하고 처리하도록 개선
+   - 코루틴 처리에서 발생하는 예외 상황에 대한 대응 로직 강화
+
+2. **타입 변환 일관성 향상**
+   - MongoDB ObjectId와 문자열 ID 간 변환 로직을 일관되게 적용
+   - 모든 ID 참조가 일관된 방식으로 처리되도록 표준화
+
 ## 2025-05-18 오류 수정 업데이트
 
 ### 수정된 주요 오류

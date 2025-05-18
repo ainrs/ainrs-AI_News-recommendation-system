@@ -457,7 +457,7 @@ class RecommendationService:
             for item in trending_news:
                 news = item["news"]
                 summary = NewsSummary(
-                    id=news["_id"],
+                    id=str(news["_id"]),
                     title=news["title"],
                     source=news["source"],
                     published_date=news["published_date"],

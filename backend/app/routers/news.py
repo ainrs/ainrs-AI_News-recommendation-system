@@ -156,7 +156,7 @@ async def get_news_detail(
 
                     # 2.3 신뢰도 분석
                     try:
-                        # 신뢰도 분석 비동기 호출
+                        # 신뢰도 분석 비동기 호출 - 코루틴이 아닌 결과를 얻도록 수정
                         tasks.append(asyncio.create_task(
                             trust_service.analyze_trust(
                                 title,
@@ -168,12 +168,9 @@ async def get_news_detail(
                         # 기본값 설정
                         trust_result = {"trust_score": 0.5, "source": "default"}
 
-                    # 2.4 감정 분석
+                    # 2.4 감정 분석 - asyncio.to_thread는 이미 코루틴을 반환하므로 래핑 필요 없음
                     tasks.append(asyncio.create_task(
-                        asyncio.to_thread(
-                            sentiment_service.analyze_sentiment,
-                            content
-                        )
+                        sentiment_service.analyze_sentiment(content)
                     ))
 
                     # 모든 작업 대기

@@ -210,9 +210,8 @@ class LangChainService:
                         # 이벤트 루프가 없는 경우 새 루프 생성
                         new_loop = asyncio.new_event_loop()
                         asyncio.set_event_loop(new_loop)
-                        sentiment_result = new_loop.run_until_complete(
-                            sentiment_service.analyze_sentiment(sentiment_text)
-                        )
+                        coro = sentiment_service.analyze_sentiment(sentiment_text)
+                        sentiment_result = new_loop.run_until_complete(coro)
                         new_loop.close()
 
                     # 감정 분석 결과가 없는 경우 백업 사용
@@ -222,9 +221,8 @@ class LangChainService:
                     # 이벤트 루프 오류 시 새 루프 생성
                     new_loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(new_loop)
-                    sentiment_result = new_loop.run_until_complete(
-                        sentiment_service.analyze_sentiment(f"{title} {content[:1000]}")
-                    )
+                    coro = sentiment_service.analyze_sentiment(f"{title} {content[:1000]}")
+                    sentiment_result = new_loop.run_until_complete(coro)
                     new_loop.close()
 
                 # 감정 분석 결과 처리
@@ -306,9 +304,8 @@ class LangChainService:
                     new_loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(new_loop)
                     metadata = {"title": title}
-                    trust_result = new_loop.run_until_complete(
-                        trust_service.calculate_trust_score(f"{title} {content[:2000]}", metadata)
-                    )
+                    coro = trust_service.calculate_trust_score(f"{title} {content[:2000]}", metadata)
+                    trust_result = new_loop.run_until_complete(coro)
                     # 딕셔너리 형태로 반환되는 결과 처리
                     if isinstance(trust_result, dict) and "trust_score" in trust_result:
                         trust_score = trust_result["trust_score"]

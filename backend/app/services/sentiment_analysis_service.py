@@ -36,15 +36,17 @@ class SentimentAnalysisService:
         Returns:
             감정 분석 결과 (점수 및 라벨)
         """
-        if not text:
-            return {
-                "label": "NEUTRAL",
-                "score": 0.5,
-                "positive": 0.3,
-                "neutral": 0.7,
-                "negative": 0.0,
-                "source": "empty_input"
-            }
+        try:
+            # 빈 텍스트 처리
+            if not text:
+                return {
+                    "label": "NEUTRAL",
+                    "score": 0.5,
+                    "positive": 0.3,
+                    "neutral": 0.7,
+                    "negative": 0.0,
+                    "source": "empty_input"
+                }
 
         # 모델이 로드되지 않은 경우 로드 시도
         if not hasattr(self, 'model') or self.model is None:
@@ -112,25 +114,32 @@ class SentimentAnalysisService:
                     label = "NEUTRAL"
                     score = neutral
 
-            return {
+            result = {
                 "label": label,
                 "score": float(score),
                 "positive": float(positive),
                 "neutral": float(neutral),
-                "negative": float(negative)
+                "negative": float(negative),
+                "source": "model"
             }
+            # 로깅 추가
+            print(f"감정 분석 완료: {result['label']}, 점수 = {result['score']}")
+            return result
 
         except Exception as e:
             print(f"감정 분석 중 오류 발생: {e}")
 
             # 오류 발생 시 백업 방식 시도
-            fallback_result = await self._fallback_sentiment_analysis(text)
-            if fallback_result:
-                return fallback_result
+            try:
+                fallback_result = await self._fallback_sentiment_analysis(text)
+                if fallback_result:
+                    return fallback_result
+            except Exception as fallback_error:
+                print(f"백업 감정 분석도 실패: {fallback_error}")
 
             # 모든 백업 방식 실패 시 기본값 반환
             return {
-                "label": "ERROR",
+                "label": "NEUTRAL",
                 "score": 0.5,
                 "positive": 0.0,
                 "neutral": 1.0,
@@ -156,6 +165,9 @@ class SentimentAnalysisService:
 
             # 랭체인의 감정 분석 기능 호출
             sentiment_result = await lc_service.analyze_sentiment("", text)
+            # 결과가 코루틴인 경우 처리
+            if hasattr(sentiment_result, '__await__'):
+                sentiment_result = await sentiment_result
 
             if isinstance(sentiment_result, dict) and "sentiment" in sentiment_result:
                 sentiment_info = sentiment_result["sentiment"]

@@ -21,7 +21,7 @@ router = APIRouter(
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # OAuth2 설정
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/auth/login")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
 
 # 시크릿 키 설정
 SECRET_KEY = settings.EMAIL_VERIFICATION_SECRET_KEY

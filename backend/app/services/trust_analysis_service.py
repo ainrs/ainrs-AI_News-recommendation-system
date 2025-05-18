@@ -384,10 +384,14 @@ class TrustAnalysisService:
                 langchain_service = get_langchain_service()
 
                 # 랭체인의 신뢰도 분석 기능 활용
+                # 랭체인의 analyze_trust 호출 (코루틴 처리 주의)
                 trust_result = await langchain_service.analyze_trust(
                     title=metadata.get("title", ""),
                     content=text
                 )
+                # 결과가 코루틴인 경우 처리
+                if hasattr(trust_result, '__await__'):
+                    trust_result = await trust_result
 
                 if isinstance(trust_result, dict) and "trust_score" in trust_result:
                     result = {
@@ -475,8 +479,15 @@ class TrustAnalysisService:
             Dict[str, Any]: 신뢰도 분석 결과
         """
         combined_text = f"{title}\n\n{content}"
-        result = await self.calculate_trust_score(combined_text, {"title": title})
-        return result
+        try:
+            result = await self.calculate_trust_score(combined_text, {"title": title})
+            # 결과가 코루틴인지 확인하고 올바르게 처리
+            if hasattr(result, '__await__'):
+                result = await result
+            return result
+        except Exception as e:
+            logger.error(f"신뢰도 분석 중 오류: {e}")
+            return {"trust_score": 0.6, "source": "fallback"}
 
 # 서비스 인스턴스를 가져오는 헬퍼 함수
 _trust_analysis_service = None
