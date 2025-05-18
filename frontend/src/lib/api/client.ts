@@ -166,7 +166,7 @@ export const apiClient = {
           token_type: string;
           user_id: string;
           username: string;
-        }>('/api/auth/login', {
+        }>('/auth/login', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/x-www-form-urlencoded',
@@ -195,7 +195,7 @@ export const apiClient = {
           message: string;
           user_id: string;
           verification_required?: boolean;
-        }>('/api/auth/register', {
+        }>('/auth/register', {
           method: 'POST',
           body: JSON.stringify({
             username,
@@ -222,7 +222,7 @@ export const apiClient = {
           status: string;
           message: string;
           expires_in_minutes: number;
-        }>('/api/email/send-verification-code', {
+        }>('/email/send-verification-code', {
           method: 'POST',
           body: JSON.stringify({ email }),
         });
@@ -245,7 +245,7 @@ export const apiClient = {
           status: string;
           message: string;
           verified: boolean;
-        }>('/api/email/verify-code', {
+        }>('/email/verify-code', {
           method: 'POST',
           body: JSON.stringify({ email, code }),
         });
@@ -732,8 +732,8 @@ export const apiClient = {
      * RSS 피드 데이터 가져오기
      */
     getRSSFeeds: async (category?: string): Promise<News[]> => {
-      // 백엔드 API 경로는 /api/v1/rss/feeds 입니다
-      const endpoint = category ? `/api/v1/rss/feeds?category=${category}` : '/api/v1/rss/feeds';
+      // 백엔드 API 경로는 /rss/feeds 입니다
+      const endpoint = category ? `/rss/feeds?category=${category}` : '/rss/feeds';
       try {
         return await fetchApi<News[]>(endpoint);
       } catch (error) {
