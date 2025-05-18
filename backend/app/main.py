@@ -128,8 +128,8 @@ app.include_router(news.router, prefix="/api/v1")
 app.include_router(users.router, prefix="/api/v1")
 app.include_router(admin.router, prefix="/api/v1")
 app.include_router(recommendation.router, prefix="/api/v1")
-app.include_router(auth.router)
-app.include_router(email_verification.router)
+app.include_router(auth.router, prefix="/api/v1")
+app.include_router(email_verification.router, prefix="/api/v1")
 
 # 애플리케이션 시작 시 이벤트 핸들러
 @app.on_event("startup")

@@ -36,17 +36,16 @@ class SentimentAnalysisService:
         Returns:
             감정 분석 결과 (점수 및 라벨)
         """
-        try:
-            # 빈 텍스트 처리
-            if not text:
-                return {
-                    "label": "NEUTRAL",
-                    "score": 0.5,
-                    "positive": 0.3,
-                    "neutral": 0.7,
-                    "negative": 0.0,
-                    "source": "empty_input"
-                }
+        # 빈 텍스트 처리
+        if not text:
+            return {
+                "label": "NEUTRAL",
+                "score": 0.5,
+                "positive": 0.3,
+                "neutral": 0.7,
+                "negative": 0.0,
+                "source": "empty_input"
+            }
 
         # 모델이 로드되지 않은 경우 로드 시도
         if not hasattr(self, 'model') or self.model is None:
