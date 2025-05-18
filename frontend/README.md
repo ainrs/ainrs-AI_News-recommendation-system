@@ -1,36 +1,64 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# NVIPBION.AI 프론트엔드
 
-## Getting Started
+## 2025-05-18 오류 수정 업데이트
 
-First, run the development server:
+### 수정된 주요 오류
 
+1. **React 컴포넌트의 Key 속성 오류 수정**
+   - NewsSection 컴포넌트에서 map 함수로 렌더링되는 항목들에 고유한 key 속성 추가
+   - 카테고리 항목 반복 시 안전한 key 생성 로직 구현
+   - 각 뉴스 아이템 렌더링 시 고유 식별자를 사용하도록 수정
+
+2. **이미지 로딩 문제 해결**
+   - 접근 불가능한 외부 이미지 플레이스홀더(`via.placeholder.com` 등) 대신 base64 인코딩된 이미지 사용
+   - 이미지 로드 실패 시 기본 이미지가 표시되도록 개선
+   - 썸네일과 상세 페이지 이미지 처리 로직 개선
+
+3. **API 클라이언트 설정 개선**
+   - API 요청에 타임아웃 설정 추가로 응답 없는 요청이 무한정 대기하지 않도록 수정
+   - 재시도 간격을 2초에서 1초로 줄여 더 빠른 재시도가 가능하도록 최적화
+   - 재시도 횟수를 3회로 설정하여 네트워크 불안정 상황에서도 연결 시도
+
+4. **카테고리별 뉴스 표시 문제 해결**
+   - 백엔드의 카테고리 필터링 문제 해결과 연계하여 모든 카테고리의 뉴스가 올바르게 표시되도록 수정
+   - 빈 카테고리 처리 로직 개선
+
+5. **뉴스 상세 페이지 내용 표시 문제 해결**
+   - 상세 페이지에서 뉴스 내용과 이미지가 제대로 표시되지 않던 문제 수정
+   - 누락된 필드에 대한 대체값 처리 로직 구현
+
+6. **트렌딩 뉴스와 콜드 스타트 추천 섹션 문제 해결**
+   - API 연결 오류로 인해 표시되지 않던 섹션들이 정상적으로 작동하도록 수정
+   - 데이터 로딩 상태와 오류 처리 개선
+
+### 기술적 개선사항
+
+1. **오류 처리 강화**
+   - 타입 안정성 개선: 데이터 타입 검사 및 기본값 설정으로 런타임 오류 방지
+   - 네트워크 요청 실패 시 사용자 경험 개선을 위한 UI 피드백 추가
+
+2. **성능 최적화**
+   - 불필요한 렌더링 방지: React 컴포넌트 최적화
+   - API 요청 효율성 향상: 캐싱 및 중복 요청 방지
+
+3. **코드 품질 향상**
+   - 일관된 코드 스타일 적용
+   - 주요 컴포넌트 및 함수에 주석 추가로 가독성 향상
+
+### 실행 방법
+
+프론트엔드 개발 서버 실행:
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+cd frontend/variety-ai-news
+npm install  # 또는 yarn install
+npm run dev  # 또는 yarn dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+위 명령어는 필요한 의존성을 설치하고 개발 서버를 실행합니다.
+프론트엔드는 기본적으로 http://localhost:3000 에서 실행됩니다.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+### 백엔드 연동
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+프론트엔드가 제대로 작동하려면 백엔드 서버가 실행 중이어야 합니다.
+백엔드 서버는 기본적으로 http://localhost:8000 에서 실행되며,
+이 주소는 frontend/variety-ai-news/src/lib/api/client.ts 파일의 API_BASE_URL 상수에 설정되어 있습니다.

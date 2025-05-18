@@ -6,6 +6,7 @@
 import { type News, type NewsSummary, NewsSearchQuery, type HealthCheckResponse } from './types';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000/api/v1';
+const API_TIMEOUT = 10000; // 10초 타임아웃
 
 /**
  * API 요청을 처리하는 기본 함수
@@ -29,7 +30,26 @@ async function fetchApi<T = unknown>(
 
   try {
     console.log(`📡 API 요청: ${options.method || 'GET'} ${url}`);
-    const response = await fetch(url, config);
+
+    // 타임아웃이 있는 fetch 구현
+    const fetchWithTimeout = async (resource: string, options: RequestInit, timeout: number) => {
+      const controller = new AbortController();
+      const id = setTimeout(() => controller.abort(), timeout);
+
+      try {
+        const response = await fetch(resource, {
+          ...options,
+          signal: controller.signal
+        });
+        clearTimeout(id);
+        return response;
+      } catch (error) {
+        clearTimeout(id);
+        throw error;
+      }
+    };
+
+    const response = await fetchWithTimeout(url, config, API_TIMEOUT);
 
     // 에러 처리
     if (!response.ok) {
@@ -85,7 +105,7 @@ async function fetchApiWithRetry<T = unknown>(
   endpoint: string,
   options: RequestInit = {},
   maxRetries = 3,
-  retryDelay = 2000
+  retryDelay = 1000
 ): Promise<T> {
   let lastError: Error | null = null;
 
