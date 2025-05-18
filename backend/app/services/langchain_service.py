@@ -185,45 +185,39 @@ class LangChainService:
                 # 동기 버전 분석 호출 시도
                 import asyncio
                 try:
-                    # 안전한 방식으로 비동기 처리
+                    # 외부 감정 분석 서비스 호출
                     sentiment_text = f"{title} {content[:1000]}"
 
-                    # 헬퍼 메소드 - 클래스에 아래 메소드 추가됨
-                    def run_async_safely(coro):
-                        """비동기 코루틴을 안전하게 실행하는 헬퍼 함수"""
-                        try:
-                            # 이미 실행 중인 루프가 있는지 확인
-                            try:
-                                loop = asyncio.get_event_loop()
-                                if loop.is_running():
-                                    # 동기 방식으로 처리 (백업 함수 호출)
-                                    return None  # 표시용 - 아래에서 감지하여 백업 함수 사용
-                            except RuntimeError:
-                                pass  # 루프가 없는 경우
+                    # asyncio 이벤트 루프 처리
+                    import asyncio
+                    try:
+                        # 현재 이벤트 루프 가져오기 시도
+                        loop = asyncio.get_event_loop()
+                        if loop.is_running():
+                            # 이미 실행 중인 경우 새 루프 생성
+                            new_loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(new_loop)
+                            sentiment_result = new_loop.run_until_complete(
+                                sentiment_service.analyze_sentiment(sentiment_text)
+                            )
+                            new_loop.close()
+                        else:
+                            # 기존 루프 사용
+                            sentiment_result = loop.run_until_complete(
+                                sentiment_service.analyze_sentiment(sentiment_text)
+                            )
+                    except RuntimeError:
+                        # 이벤트 루프가 없는 경우 새 루프 생성
+                        new_loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(new_loop)
+                        sentiment_result = new_loop.run_until_complete(
+                            sentiment_service.analyze_sentiment(sentiment_text)
+                        )
+                        new_loop.close()
 
-                            # 새 루프 생성 및 실행
-                            loop = asyncio.new_event_loop()
-                            asyncio.set_event_loop(loop)
-                            result = loop.run_until_complete(coro)
-                            loop.close()
-                            return result
-                        except Exception as e:
-                            logger.error(f"비동기 실행 오류: {e}")
-                            return None
-
-                    # 비동기 함수 실행
-                    sentiment_result = run_async_safely(
-                        sentiment_service.analyze_sentiment(sentiment_text)
-                    )
-
-                    # 비동기 호출 실패 시 백업 사용
+                    # 감정 분석 결과가 없는 경우 백업 사용
                     if sentiment_result is None:
                         sentiment_label, sentiment_score = self._analyze_sentiment_backup(content)
-                    else:
-                        # 기존 루프 사용
-                        sentiment_result = loop.run_until_complete(
-                            sentiment_service.analyze_sentiment(f"{title} {content[:1000]}")
-                        )
                 except RuntimeError:
                     # 이벤트 루프 오류 시 새 루프 생성
                     new_loop = asyncio.new_event_loop()

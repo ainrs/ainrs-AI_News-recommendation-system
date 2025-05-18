@@ -64,7 +64,7 @@ except Exception as e:
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "https://localhost:3000", "*"],  # 프론트엔드 URL 명시
+    allow_origins=["*"],  # 모든 오리진 허용
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -330,9 +330,9 @@ async def get_news(
         if source:
             query["source"] = source
 
-        # 카테고리 필터링 로직 수정 - 정확히 일치하는 카테고리로 필터링
+        # 카테고리 필터링 로직 수정 - 카테고리 배열에 포함된 항목 검색
         if category:
-            query["categories"] = category
+            query["categories"] = {"$in": [category]}  # 배열 내에 카테고리가 포함된 항목 검색
             logger.info(f"카테고리 필터링: {category}, 쿼리: {query}")
 
         # 데이터베이스 상태 확인
@@ -359,7 +359,7 @@ async def get_news(
         for item in news:
             # 필수 필드에 기본값 할당 (유효성 검사 오류 방지)
             if "image_url" not in item or not item.get("image_url"):
-                item["image_url"] = "https://via.placeholder.com/300x200?text=No+Image"
+                item["image_url"] = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAZAAAADICAMAAAD2ShmzAAAAM1BMVEX////CwsL5+fnV1dXq6ur19fXg4OC8vLzT09Pt7e3Hx8fv7+/d3d3h4eHQ0NCwsLD///+ck8V3AAAACXBIWXMAAAsTAAALEwEAmpwYAAAD90lEQVR4nO3di5KjIBCFYQREvEDf/2UX0E2ceGlAiQy6/1fTtZVJ1SQndjtBr7IcZ7TqfnAZHhODu1cP/92V0tpqEz6BePgzcb/+Qb01hSK9VQeQKU6e0iJ6VXpRfFcfoAlbRZoiCCKEAEIIIIQAQggghABCCCCEAEIIBYUwU0kGsZoG8k4yiNPf1f9bvWQQ70zpSnnBILZcnhTLBbGutBDLfXbFBmF/CJQMwiXtsiDcrLJXJYNYZkpCsQghgBACCCGAEAIIIYAQQgEhk9UVMGhMMVQ3qGsZbZ+HGqY53jJp90Nouo2HUL2O/6pqpjmGQx6R9PlbY8+GUJ0+GTTHJdIhVGfOhFCdP7OT6qYTi6NvRULcR3UkBnVbXOUexFd2LkTVdjnRV3ZqIGbLXnp2Jb5T8dwcPrM5F8It/Ft48yrR3HbVHQ+hvlqfFwihL5cA4SCr1J0B8UWnPTKhvtfAu9ZQCB2sU85rCcyH0Nl65GQIXaj+T4doCtL4jAL3hWzpkahZXLsxO2tRFoIyIKV6ZDaEZmwDQlUHQVyhQkNo3g4gtPCDNkdVIJdDXJt0Y5xXcmMOyjXIpZNIGj3mZQgVPd4IQttaCqG1zfI1EFoNGc6HUNnD8URIYJ8QYzAiFMStzZGlENrYvhLSl2t20qUQYm1hq+wVh0Jo4UgIre6PQ6jocYi+XGXXJZdBaN2i4iFUdkVSPy7axrIglHdZXz/OwpW3UrMg3aYP+6HdTjdX8g/SPU6hgx32P4imbKF0z0txA+bZ0e3FNuX3LtfucWhbkofVU+DhXPe4FN4vQcfz2e4JH1DQ5zt8KftFuSDgk6Ou/AxoG/HZ7Mu1ouD5N2f/rLYxe1DGCDxj6ux7yjdC5P1S4Dlt5y2TvTIQRzV7XuDZiVcfUCJ4q8qXy2EJ3yrK5aA7e6/MhfAfQxcAoYc4UWflw0BFNKcdJPjZJQgBhBBACAGEEEAIAYQQQAgBhBBACAGEEEAIAYQQQAgBhBBACAGEEEAIAYQQQAgBhBBACAGEEEAIAYQQQAgBhBAWA8K9MlwI9ynhXqQsCOcXEWw3JQvCPRdcFMkgzEfJZZEMwv1g+EqJZBDuUcN+jgWDcL8h7rkkGYR7V3FPMO5lxEUSCXGPRuoNx0USCfd65d6zDIj+Moj+Moj+Moj+Moj+Moj++vMQ8tRCf/1lEP31l0H0FzV7YV9sMQ1Wf1Gz4QDC3XaYF1tUfGISrT91EUQI/WUQ/WUQ/WUQ/WUQ/UXNIJjfGYR5xUa0+NQZ1g8lzSCkGQT7uZ14Nd8QJt5fJIjDiqIAAAAASUVORK5CYII="
 
             if "categories" not in item or not item.get("categories"):
                 item["categories"] = ["인공지능"]
@@ -399,9 +399,26 @@ async def get_news(
 @app.get("/api/v1/news/{news_id}", response_model=NewsResponse)
 async def get_news_by_id(news_id: str):
     """Get a news article by ID"""
+    # 먼저 문자열 ID로 시도
     news = news_collection.find_one({"_id": news_id})
+
+    # 결과가 없으면 ObjectId로 시도
+    if not news:
+        try:
+            obj_id = ObjectId(news_id)
+            news = news_collection.find_one({"_id": obj_id})
+        except:
+            # ID가 문자열인데 MongoDB에는 ObjectId로 저장된 경우
+            # 또는 그 반대의 경우를 처리
+            news = news_collection.find_one({"id": news_id})
+
+    # 여전히 결과가 없으면 에러
     if not news:
         raise HTTPException(status_code=404, detail="News not found")
+
+    # 누락된 필드 처리
+    if "image_url" not in news or not news.get("image_url"):
+        news["image_url"] = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAZAAAADICAMAAAD2ShmzAAAAM1BMVEX////CwsL5+fnV1dXq6ur19fXg4OC8vLzT09Pt7e3Hx8fv7+/d3d3h4eHQ0NCwsLD///+ck8V3AAAACXBIWXMAAAsTAAALEwEAmpwYAAAD90lEQVR4nO3di5KjIBCFYQREvEDf/2UX0E2ceGlAiQy6/1fTtZVJ1SQndjtBr7IcZ7TqfnAZHhODu1cP/92V0tpqEz6BePgzcb/+Qb01hSK9VQeQKU6e0iJ6VXpRfFcfoAlbRZoiCCKEAEIIIIQAQggghABCCCCEAEIIBYUwU0kGsZoG8k4yiNPf1f9bvWQQ70zpSnnBILZcnhTLBbGutBDLfXbFBmF/CJQMwiXtsiDcrLJXJYNYZkpCsQghgBACCCGAEAIIIYAQQgEhk9UVMGhMMVQ3qGsZbZ+HGqY53jJp90Nouo2HUL2O/6pqpjmGQx6R9PlbY8+GUJ0+GTTHJdIhVGfOhFCdP7OT6qYTi6NvRULcR3UkBnVbXOUexFd2LkTVdjnRV3ZqIGbLXnp2Jb5T8dwcPrM5F8It/Ft48yrR3HbVHQ+hvlqfFwihL5cA4SCr1J0B8UWnPTKhvtfAu9ZQCB2sU85rCcyH0Nl65GQIXaj+T4doCtL4jAL3hWzpkahZXLsxO2tRFoIyIKV6ZDaEZmwDQlUHQVyhQkNo3g4gtPCDNkdVIJdDXJt0Y5xXcmMOyjXIpZNIGj3mZQgVPd4IQttaCqG1zfI1EFoNGc6HUNnD8URIYJ8QYzAiFMStzZGlENrYvhLSl2t20qUQYm1hq+wVh0Jo4UgIre6PQ6jocYi+XGXXJZdBaN2i4iFUdkVSPy7axrIglHdZXz/OwpW3UrMg3aYP+6HdTjdX8g/SPU6hgx32P4imbKF0z0txA+bZ0e3FNuX3LtfucWhbkofVU+DhXPe4FN4vQcfz2e4JH1DQ5zt8KftFuSDgk6Ou/AxoG/HZ7Mu1ouD5N2f/rLYxe1DGCDxj6ux7yjdC5P1S4Dlt5y2TvTIQRzV7XuDZiVcfUCJ4q8qXy2EJ3yrK5aA7e6/MhfAfQxcAoYc4UWflw0BFNKcdJPjZJQgBhBBACAGEEEAIAYQQQAgBhBBACAGEEEAIAYQQQAgBhBBACAGEEEAIAYQQQAgBhBBACAGEEEAIAYQQQAgBhBAWA8K9MlwI9ynhXqQsCOcXEWw3JQvCPRdcFMkgzEfJZZEMwv1g+EqJZBDuUcN+jgWDcL8h7rkkGYR7V3FPMO5lxEUSCXGPRuoNx0USCfd65d6zDIj+Moj+Moj+Moj+Moj+Moj++vMQ8tRCf/1lEP31l0H0FzV7YV9sMQ1Wf1Gz4QDC3XaYF1tUfGISrT91EUQI/WUQ/WUQ/WUQ/WUQ/UXNIJjfGYR5xUa0+NQZ1g8lzSCkGQT7uZ14Nd8QJt5fJIjDiqIAAAAASUVORK5CYII="
 
     return NewsResponse(
         id=news["_id"],

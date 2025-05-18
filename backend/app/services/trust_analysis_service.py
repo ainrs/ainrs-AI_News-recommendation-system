@@ -463,6 +463,21 @@ class TrustAnalysisService:
             # 오류 발생 시 기본값 반환
             return {"trust_score": 0.5, "source": "error", "confidence": 0.0}
 
+    async def analyze_trust(self, title: str, content: str) -> Dict[str, Any]:
+        """
+        뉴스 기사의 신뢰도를 분석합니다.
+
+        Args:
+            title: 뉴스 제목
+            content: 뉴스 내용
+
+        Returns:
+            Dict[str, Any]: 신뢰도 분석 결과
+        """
+        combined_text = f"{title}\n\n{content}"
+        result = await self.calculate_trust_score(combined_text, {"title": title})
+        return result
+
 # 서비스 인스턴스를 가져오는 헬퍼 함수
 _trust_analysis_service = None
 

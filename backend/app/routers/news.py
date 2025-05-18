@@ -155,14 +155,18 @@ async def get_news_detail(
                     ))
 
                     # 2.3 신뢰도 분석
-                    tasks.append(asyncio.create_task(
-                        asyncio.to_thread(
-                            trust_service.analyze_trust,
-                            title,
-                            content,
-                            news.get("source", "")
-                        )
-                    ))
+                    try:
+                        # 신뢰도 분석 비동기 호출
+                        tasks.append(asyncio.create_task(
+                            trust_service.analyze_trust(
+                                title,
+                                content
+                            )
+                        ))
+                    except Exception as trust_error:
+                        logger.error(f"신뢰도 분석 작업 생성 중 오류: {trust_error}")
+                        # 기본값 설정
+                        trust_result = {"trust_score": 0.5, "source": "default"}
 
                     # 2.4 감정 분석
                     tasks.append(asyncio.create_task(

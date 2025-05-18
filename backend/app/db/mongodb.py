@@ -115,8 +115,43 @@ async def _ensure_indexes(db: motor.motor_asyncio.AsyncIOMotorDatabase) -> None:
     """
     필요한 인덱스를 생성합니다.
     """
+    # 인덱스 생성 전에 id가 null인 문서들을 처리
+    try:
+        # id가 null인 문서들 확인
+        null_id_docs = await db["news"].count_documents({"id": None})
+        if null_id_docs > 0:
+            logger.warning(f"id가 null인 {null_id_docs}개 문서 확인됨. 이 문서들을 수정합니다.")
+
+            # id가 null인 문서들에 임의의 id 할당
+            import uuid
+            cursor = db["news"].find({"id": None})
+            async for doc in cursor:
+                doc_id = str(uuid.uuid4())
+                await db["news"].update_one(
+                    {"_id": doc["_id"]},
+                    {"$set": {"id": doc_id}}
+                )
+            logger.info("id가 null인 문서들 수정 완료")
+    except Exception as e:
+        logger.error(f"id가 null인 문서 처리 중 오류 발생: {str(e)}")
+
     # 뉴스 컬렉션 인덱스
-    await db["news"].create_index("id", unique=True)
+    try:
+        # 기존 인덱스 삭제 시도
+        try:
+            await db["news"].drop_index("id_1")
+            logger.info("기존 id 인덱스 삭제 성공")
+        except Exception as e:
+            logger.debug(f"기존 인덱스 삭제 중 오류 (무시됨): {str(e)}")
+
+        # 중복 문서 제거 (id가 null인 문서를 한 번 더 삭제)
+        await db["news"].delete_many({"id": None})
+
+        # 인덱스 생성
+        await db["news"].create_index("id", unique=True)
+        logger.info("id 인덱스 생성 성공")
+    except Exception as idx_error:
+        logger.error(f"id 인덱스 생성 중 오류: {str(idx_error)}")
     await db["news"].create_index("source")
     await db["news"].create_index("categories")
     await db["news"].create_index("published_at")
