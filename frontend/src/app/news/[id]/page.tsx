@@ -39,8 +39,11 @@ export async function generateMetadata({ params }: NewsPageParams): Promise<Meta
   let title = `뉴스 | 버라이어티.AI`;
   let description = '버라이어티.AI 뉴스 상세 정보';
 
-  // ID 유효성 검사
-  if (!isValidId(params.id)) {
+  // params.id는 Promise를 통해 접근
+  const id = params.id;
+
+  // ID 유효성 검사를 비동기 함수 내에서 처리
+  if (!id || !isValidId(id)) {
     return {
       title: '잘못된 뉴스 ID | 버라이어티.AI',
       description: '요청하신 뉴스를 찾을 수 없습니다.'
@@ -49,7 +52,7 @@ export async function generateMetadata({ params }: NewsPageParams): Promise<Meta
 
   try {
     // 서버 측에서 뉴스 데이터 가져오기
-    const newsData = await getNewsData(params.id);
+    const newsData = await getNewsData(id);
 
     if (newsData) {
       title = `${newsData.title} | 버라이어티.AI`;
@@ -66,7 +69,7 @@ export async function generateMetadata({ params }: NewsPageParams): Promise<Meta
       title,
       description,
       type: 'article',
-      url: `https://variety-ai-news.com/news/${params.id}`,
+      url: `https://variety-ai-news.com/news/${id}`,
     },
   };
 }
@@ -84,8 +87,11 @@ function isValidId(id: string): boolean {
 }
 
 export default async function NewsPage({ params }: NewsPageParams) {
+  // params.id를 상수에 저장하여 사용
+  const id = params.id;
+
   // URL 파라미터 유효성 검사
-  if (!isValidId(params.id)) {
+  if (!isValidId(id)) {
     return (
       <div className="min-h-screen flex flex-col">
         <Header />
@@ -107,9 +113,9 @@ export default async function NewsPage({ params }: NewsPageParams) {
   }
 
   // 서버 측에서 뉴스 데이터 가져오기 시도 (선택 사항)
-  // const newsData = await getNewsData(params.id);
+  // const newsData = await getNewsData(id);
 
   // 뉴스 상세 페이지 컴포넌트에 데이터 전달
   // NewsDetailPage는 여전히 클라이언트 컴포넌트로, 자체적으로 데이터를 가져올 수도 있음
-  return <NewsDetailPage newsId={params.id} />;
+  return <NewsDetailPage newsId={id} />;
 }

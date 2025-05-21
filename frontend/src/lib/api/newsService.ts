@@ -114,10 +114,21 @@ export const newsService = {
    * 뉴스 데이터를 프론트엔드 표시용으로 변환합니다.
    */
   formatNewsForDisplay: (news: News): NewsForDisplay => {
+    // 디버깅용: 뉴스 원본 데이터 구조 확인
+    console.log('뉴스 원본 데이터:', {
+      id: news._id || news.id,
+      hasContent: !!news.content,
+      contentLength: news.content?.length,
+      hasSummary: !!news.summary,
+      summaryLength: news.summary?.length,
+      hasImageUrl: !!news.image_url,
+      imageUrl: news.image_url
+    });
+
     return {
       id: news._id || news.id || `news-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
       title: news.title,
-      content: news.content,
+      content: news.content || '',
       summary: news.summary || '',
       source: news.source,
       publishedDate: new Date(news.published_date).toLocaleDateString('ko-KR', {
@@ -127,11 +138,13 @@ export const newsService = {
       }),
       author: news.author || '',
       imageUrl: news.image_url || '',
-      categories: news.categories,
-      url: news.url,
+      categories: news.categories || [],
+      url: news.url || '',
       trustScore: news.trust_score || 0,
       sentimentScore: news.sentiment_score || 0,
       aiEnhanced: news.ai_enhanced || false, // AI 향상 여부
+      // 원본 데이터 유지
+      _originalData: news
     };
   },
 };
@@ -151,6 +164,7 @@ export interface NewsForDisplay {
   trustScore: number;
   sentimentScore: number;
   aiEnhanced: boolean; // AI 강화 여부
+  _originalData?: any; // 원본 데이터 보존 (디버깅용)
 }
 
 export default newsService;

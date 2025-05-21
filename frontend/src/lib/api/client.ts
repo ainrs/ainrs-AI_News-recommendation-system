@@ -402,7 +402,7 @@ export const apiClient = {
     getColdStartRecommendations: async (limit = 5): Promise<NewsSummary[]> => {
       try {
         // 재시도 로직 사용 (최대 3번, 2초 간격)
-        return await fetchApiWithRetry<NewsSummary[]>(`/api/v1/recommendation/news/cold-start?limit=${limit}`, {}, 3, 2000);
+        return await fetchApiWithRetry<NewsSummary[]>(`/api/v1/news/cold-start?limit=${limit}`, {}, 3, 2000);
       } catch (error) {
         // 오류 시 트렌딩 뉴스로 폴백
         return await apiClient.news.getTrending(limit);

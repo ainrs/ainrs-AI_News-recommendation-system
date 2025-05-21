@@ -244,6 +244,9 @@ export default function NewsDetailPage({ newsId }: { newsId: string }) {
 
   const newsItem = news[0];
 
+  // 뉴스 데이터 디버깅
+  console.log('뉴스 데이터:', newsItem);
+
   return (
     <div className="min-h-screen flex flex-col">
       <Header />
@@ -294,18 +297,17 @@ export default function NewsDetailPage({ newsId }: { newsId: string }) {
 
             {/* 뉴스 썸네일 */}
             {newsItem.imageUrl && (
-              <div className="relative h-96 mb-6 rounded-md overflow-hidden">
-                <Image
+              <div className="mb-6 rounded-md overflow-hidden">
+                <img
                   src={newsItem.imageUrl}
                   alt={newsItem.title}
-                  fill
-                  className="object-cover"
+                  className="object-cover w-full max-h-96 rounded-md"
                 />
               </div>
             )}
 
-            {/* AI 요약 - 본문 중복 확인 */}
-            {(aiAnalysis.summary || newsItem.aiEnhanced) && (
+            {/* AI 요약 - 본문 중복 확인 및 요약과 내용의 차이 확인 */}
+            {(aiAnalysis.summary || newsItem.summary) && (
               <div className="bg-blue-50 p-4 rounded-md mb-6">
                 <h3 className="font-semibold text-blue-800 mb-2 flex items-center">
                   <span className="mr-2">AI 요약</span>
@@ -316,9 +318,9 @@ export default function NewsDetailPage({ newsId }: { newsId: string }) {
                   )}
                 </h3>
                 <p className="text-blue-800">
-                  {(aiAnalysis.summary && aiAnalysis.summary !== newsItem.content)
+                  {(aiAnalysis.summary && aiAnalysis.summary !== newsItem.content && aiAnalysis.summary.length > 20)
                     ? aiAnalysis.summary
-                    : (newsItem.summary && newsItem.summary !== newsItem.content)
+                    : (newsItem.summary && newsItem.summary !== newsItem.content && newsItem.summary.length > 20)
                       ? newsItem.summary
                       : "이 뉴스의 요약을 생성할 수 없습니다."}
                 </p>
@@ -360,38 +362,60 @@ export default function NewsDetailPage({ newsId }: { newsId: string }) {
             </div>
             {/* 뉴스 컨텐츠 표시 - 한국어 기사 포맷에 맞게 조정 */}
             <div className="prose max-w-none mb-6">
-              {newsItem.content
-                .split('\n')
-                .map((paragraph, idx) => paragraph.trim())
-                .filter(Boolean) // 빈 문단 제거
-                .map((paragraph, idx) => {
-                  // 첫 단락은 들여쓰기 없이 볼드체로
-                  if (idx === 0) {
+              {/* 뉴스 내용 헤더 - 눈에 띄게 표시 */}
+              <h3 className="text-lg font-bold text-gray-800 mb-4 border-b pb-2">뉴스 본문</h3>
+
+              {/* 이미지 URL 확인 및 이미지 표시 - 어떤 형태로든 이미지가 있으면 표시 */}
+              {(newsItem.imageUrl || newsItem.image_url) && (
+                <div className="mb-6 rounded-md overflow-hidden">
+                  <img
+                    src={newsItem.imageUrl || newsItem.image_url}
+                    alt={newsItem.title}
+                    className="object-cover w-full max-h-96 rounded-md"
+                  />
+                </div>
+              )}
+
+              {/* 본문 내용이 비어있지 않은지 확인 */}
+              {newsItem.content && newsItem.content.trim() ? (
+                // 본문 내용 표시
+                newsItem.content
+                  .split('\n')
+                  .map((paragraph, idx) => paragraph.trim())
+                  .filter(Boolean) // 빈 문단 제거
+                  .map((paragraph, idx) => {
+                    // 첫 단락은 들여쓰기 없이 볼드체로
+                    if (idx === 0) {
+                      return (
+                        <p key={idx} className="font-medium leading-relaxed my-4">
+                          {paragraph}
+                        </p>
+                      );
+                    }
+
+                    // 인용구 감지 (따옴표로 시작하는 경우)
+                    if (paragraph.startsWith('"') || paragraph.startsWith('"') ||
+                        paragraph.startsWith('\'') || paragraph.startsWith('"')) {
+                      return (
+                        <blockquote key={idx} className="italic border-l-4 border-gray-300 pl-4 my-4">
+                          {paragraph}
+                        </blockquote>
+                      );
+                    }
+
+                    // 일반 단락 - 적절한 들여쓰기와 줄간격
                     return (
-                      <p key={idx} className="font-medium leading-relaxed my-4">
+                      <p key={idx} className="indent-4 my-4 leading-relaxed">
                         {paragraph}
                       </p>
                     );
-                  }
-
-                  // 인용구 감지 (따옴표로 시작하는 경우)
-                  if (paragraph.startsWith('"') || paragraph.startsWith('"') ||
-                      paragraph.startsWith('\'') || paragraph.startsWith('"')) {
-                    return (
-                      <blockquote key={idx} className="italic border-l-4 border-gray-300 pl-4 my-4">
-                        {paragraph}
-                      </blockquote>
-                    );
-                  }
-
-                  // 일반 단락 - 적절한 들여쓰기와 줄간격
-                  return (
-                    <p key={idx} className="indent-4 my-4 leading-relaxed">
-                      {paragraph}
-                    </p>
-                  );
-                })
-              }
+                  })
+              ) : (
+                // 본문이 비어있는 경우 대체 메시지 표시
+                <div className="p-4 bg-gray-100 rounded-md text-gray-600">
+                  <p>뉴스 본문을 불러올 수 없습니다. 원문 링크를 통해 확인해주세요.</p>
+                </div>
+              )}
             </div>
 
             {/* 뉴스 원문 링크 */}
@@ -436,11 +460,10 @@ export default function NewsDetailPage({ newsId }: { newsId: string }) {
                     <Link href={`/news/${item.id}`}>
                       <div className="h-40 relative">
                         {item.image_url ? (
-                          <Image
+                          <img
                             src={item.image_url}
                             alt={item.title}
-                            fill
-                            className="object-cover"
+                            className="object-cover w-full h-full"
                           />
                         ) : (
                           <div className="h-full w-full bg-gray-100 flex items-center justify-center">
