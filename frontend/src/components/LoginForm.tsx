@@ -9,6 +9,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { useAuth } from '@/lib/auth/authContext';
 import EmailVerification from './EmailVerification';
+import { checkBackendConnection } from '@/lib/api/client';
+import { Loader2 } from 'lucide-react';
 
 interface LoginFormProps {
   onLoginSuccess?: () => void;
@@ -34,6 +36,39 @@ export default function LoginForm({ onLoginSuccess }: LoginFormProps) {
   // 이메일 인증 상태
   const [showEmailVerification, setShowEmailVerification] = useState(false);
 
+  // 백엔드 연결 상태
+  const [backendStatus, setBackendStatus] = useState<{
+    connected: boolean;
+    message?: string;
+    checking: boolean;
+  }>({
+    connected: true,
+    checking: true
+  });
+
+  // 백엔드 연결 상태 확인
+  useEffect(() => {
+    const checkConnection = async () => {
+      setBackendStatus(prev => ({ ...prev, checking: true }));
+      try {
+        const status = await checkBackendConnection();
+        setBackendStatus({
+          connected: status.connected,
+          message: status.message,
+          checking: false
+        });
+      } catch (error) {
+        setBackendStatus({
+          connected: false,
+          message: '백엔드 서버에 연결할 수 없습니다. 서버가 실행 중인지 확인하세요.',
+          checking: false
+        });
+      }
+    };
+
+    checkConnection();
+  }, []);
+
   // 인증이 필요한 이메일이 있는지 확인
   useEffect(() => {
     const pendingEmail = getPendingVerificationEmail();
@@ -49,6 +84,11 @@ export default function LoginForm({ onLoginSuccess }: LoginFormProps) {
 
     if (!loginUsername || !loginPassword) {
       setFormError('사용자 이름과 비밀번호를 입력해주세요');
+      return;
+    }
+
+    if (!backendStatus.connected) {
+      setFormError('백엔드 서버에 연결할 수 없습니다. 잠시 후 다시 시도해주세요.');
       return;
     }
 
@@ -70,6 +110,11 @@ export default function LoginForm({ onLoginSuccess }: LoginFormProps) {
 
     if (registerPassword !== registerPasswordConfirm) {
       setFormError('비밀번호가 일치하지 않습니다');
+      return;
+    }
+
+    if (!backendStatus.connected) {
+      setFormError('백엔드 서버에 연결할 수 없습니다. 잠시 후 다시 시도해주세요.');
       return;
     }
 
@@ -114,6 +159,22 @@ export default function LoginForm({ onLoginSuccess }: LoginFormProps) {
             <TabsTrigger value="register">회원가입</TabsTrigger>
           </TabsList>
 
+          {/* 백엔드 연결 상태 표시 */}
+          {backendStatus.checking && (
+            <Alert className="mt-4 flex items-center gap-2">
+              <Loader2 className="animate-spin w-4 h-4 mr-2" />
+              <AlertDescription>서버 연결 상태 확인 중...</AlertDescription>
+            </Alert>
+          )}
+          {!backendStatus.checking && !backendStatus.connected && (
+            <Alert variant="destructive" className="mt-4">
+              <AlertDescription>
+                {backendStatus.message ||
+                  '백엔드 서버에 연결할 수 없습니다. 서버가 실행 중인지 확인하세요.'}
+              </AlertDescription>
+            </Alert>
+          )}
+
           {/* 오류 표시 */}
           {(error || formError) && (
             <Alert variant="destructive" className="mt-4">
@@ -132,7 +193,7 @@ export default function LoginForm({ onLoginSuccess }: LoginFormProps) {
                   value={loginUsername}
                   onChange={(e) => setLoginUsername(e.target.value)}
                   placeholder="사용자 이름을 입력하세요"
-                  disabled={isLoading}
+                  disabled={isLoading || backendStatus.checking || !backendStatus.connected}
                 />
               </div>
               <div className="space-y-2">
@@ -143,13 +204,13 @@ export default function LoginForm({ onLoginSuccess }: LoginFormProps) {
                   value={loginPassword}
                   onChange={(e) => setLoginPassword(e.target.value)}
                   placeholder="비밀번호를 입력하세요"
-                  disabled={isLoading}
+                  disabled={isLoading || backendStatus.checking || !backendStatus.connected}
                 />
               </div>
               <Button
                 type="submit"
                 className="w-full bg-[hsl(var(--variety-blue))]"
-                disabled={isLoading}
+                disabled={isLoading || backendStatus.checking || !backendStatus.connected}
               >
                 {isLoading ? '로그인 중...' : '로그인'}
               </Button>
@@ -167,7 +228,7 @@ export default function LoginForm({ onLoginSuccess }: LoginFormProps) {
                   value={registerUsername}
                   onChange={(e) => setRegisterUsername(e.target.value)}
                   placeholder="사용자 이름을 입력하세요"
-                  disabled={isLoading}
+                  disabled={isLoading || backendStatus.checking || !backendStatus.connected}
                 />
               </div>
               <div className="space-y-2">
@@ -178,7 +239,7 @@ export default function LoginForm({ onLoginSuccess }: LoginFormProps) {
                   value={registerEmail}
                   onChange={(e) => setRegisterEmail(e.target.value)}
                   placeholder="이메일을 입력하세요"
-                  disabled={isLoading}
+                  disabled={isLoading || backendStatus.checking || !backendStatus.connected}
                 />
               </div>
               <div className="space-y-2">
@@ -189,7 +250,7 @@ export default function LoginForm({ onLoginSuccess }: LoginFormProps) {
                   value={registerPassword}
                   onChange={(e) => setRegisterPassword(e.target.value)}
                   placeholder="비밀번호를 입력하세요"
-                  disabled={isLoading}
+                  disabled={isLoading || backendStatus.checking || !backendStatus.connected}
                 />
               </div>
               <div className="space-y-2">
@@ -200,13 +261,13 @@ export default function LoginForm({ onLoginSuccess }: LoginFormProps) {
                   value={registerPasswordConfirm}
                   onChange={(e) => setRegisterPasswordConfirm(e.target.value)}
                   placeholder="비밀번호를 다시 입력하세요"
-                  disabled={isLoading}
+                  disabled={isLoading || backendStatus.checking || !backendStatus.connected}
                 />
               </div>
               <Button
                 type="submit"
                 className="w-full bg-[hsl(var(--variety-blue))]"
-                disabled={isLoading}
+                disabled={isLoading || backendStatus.checking || !backendStatus.connected}
               >
                 {isLoading ? '계정 생성 중...' : '계정 생성'}
               </Button>

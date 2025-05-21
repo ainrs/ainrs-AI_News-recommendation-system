@@ -89,30 +89,76 @@ export default function NewsDetailPage({ newsId }: { newsId: string }) {
   // AI 분석 데이터 가져오기
   const fetchAiAnalysis = async () => {
     try {
-      // 병렬 요청으로 신뢰도 및 감정 분석 데이터 가져오기
-      const [trustAnalysis, sentimentAnalysis, keywordAnalysis] = await Promise.all([
-        apiClient.ai.analyzeTrustScore(newsId),
-        apiClient.ai.analyzeSentiment(newsId),
-        apiClient.ai.extractKeyPhrases(newsId)
-      ]);
-
-      // 텍스트 요약 가져오기
-      const summarization = await apiClient.ai.summarizeNews(newsId);
-
-      setAiAnalysis({
-        trustScore: trustAnalysis.trust_score,
-        sentimentScore: sentimentAnalysis.sentiment.score,
+      // 각 API 호출에 개별적인 try-catch를 적용하여 하나가 실패해도 다른 것들이 가능하도록 함
+      let trustAnalysis = { trust_score: 0.5 };
+      let sentimentAnalysis = {
         sentiment: {
-          label: sentimentAnalysis.sentiment.label,
-          positive: sentimentAnalysis.sentiment.positive,
-          negative: sentimentAnalysis.sentiment.negative,
-          neutral: sentimentAnalysis.sentiment.neutral
+          score: 0,
+          label: 'neutral',
+          positive: 0.33,
+          negative: 0.33,
+          neutral: 0.34
+        }
+      };
+      let keywordAnalysis = { key_phrases: [] };
+      let summarization = { summary: '' };
+
+      try {
+        trustAnalysis = await apiClient.ai.analyzeTrustScore(newsId);
+      } catch (err) {
+        console.error('신뢰도 분석 중 오류:', err);
+        // 기본값은 이미 설정됨
+      }
+
+      try {
+        sentimentAnalysis = await apiClient.ai.analyzeSentiment(newsId);
+      } catch (err) {
+        console.error('감정 분석 중 오류:', err);
+        // 기본값은 이미 설정됨
+      }
+
+      try {
+        keywordAnalysis = await apiClient.ai.extractKeyPhrases(newsId);
+      } catch (err) {
+        console.error('키워드 추출 중 오류:', err);
+        // 기본값은 이미 설정됨
+      }
+
+      try {
+        summarization = await apiClient.ai.summarizeNews(newsId);
+      } catch (err) {
+        console.error('요약 생성 중 오류:', err);
+        // 기본값은 이미 설정됨
+      }
+
+      // 안전한 접근 보장
+      setAiAnalysis({
+        trustScore: trustAnalysis?.trust_score || 0.5,
+        sentimentScore: sentimentAnalysis?.sentiment?.score || 0,
+        sentiment: {
+          label: sentimentAnalysis?.sentiment?.label || 'neutral',
+          positive: sentimentAnalysis?.sentiment?.positive || 0.33,
+          negative: sentimentAnalysis?.sentiment?.negative || 0.33,
+          neutral: sentimentAnalysis?.sentiment?.neutral || 0.34
         },
-        keyPhrases: keywordAnalysis.key_phrases,
-        summary: summarization.summary
+        keyPhrases: keywordAnalysis?.key_phrases || [],
+        summary: summarization?.summary || '요약을 생성할 수 없습니다.'
       });
     } catch (error) {
       console.error('AI 분석 데이터를 가져오는 중 오류:', error);
+      // 기본 분석 데이터 설정
+      setAiAnalysis({
+        trustScore: 0.5,
+        sentimentScore: 0,
+        sentiment: {
+          label: 'neutral',
+          positive: 0.33,
+          negative: 0.33,
+          neutral: 0.34
+        },
+        keyPhrases: [],
+        summary: '요약을 생성할 수 없습니다.'
+      });
     }
   };
 
@@ -258,7 +304,7 @@ export default function NewsDetailPage({ newsId }: { newsId: string }) {
               </div>
             )}
 
-            {/* AI 요약 */}
+            {/* AI 요약 - 본문 중복 확인 */}
             {(aiAnalysis.summary || newsItem.aiEnhanced) && (
               <div className="bg-blue-50 p-4 rounded-md mb-6">
                 <h3 className="font-semibold text-blue-800 mb-2 flex items-center">
@@ -270,7 +316,11 @@ export default function NewsDetailPage({ newsId }: { newsId: string }) {
                   )}
                 </h3>
                 <p className="text-blue-800">
-                  {aiAnalysis.summary || newsItem.summary}
+                  {(aiAnalysis.summary && aiAnalysis.summary !== newsItem.content)
+                    ? aiAnalysis.summary
+                    : (newsItem.summary && newsItem.summary !== newsItem.content)
+                      ? newsItem.summary
+                      : "이 뉴스의 요약을 생성할 수 없습니다."}
                 </p>
               </div>
             )}
@@ -308,10 +358,40 @@ export default function NewsDetailPage({ newsId }: { newsId: string }) {
                 </div>
               )}
             </div>
+            {/* 뉴스 컨텐츠 표시 - 한국어 기사 포맷에 맞게 조정 */}
             <div className="prose max-w-none mb-6">
-              {newsItem.content.split('\n').map((paragraph, idx) => (
-                <p key={idx}>{paragraph}</p>
-              ))}
+              {newsItem.content
+                .split('\n')
+                .map((paragraph, idx) => paragraph.trim())
+                .filter(Boolean) // 빈 문단 제거
+                .map((paragraph, idx) => {
+                  // 첫 단락은 들여쓰기 없이 볼드체로
+                  if (idx === 0) {
+                    return (
+                      <p key={idx} className="font-medium leading-relaxed my-4">
+                        {paragraph}
+                      </p>
+                    );
+                  }
+
+                  // 인용구 감지 (따옴표로 시작하는 경우)
+                  if (paragraph.startsWith('"') || paragraph.startsWith('"') ||
+                      paragraph.startsWith('\'') || paragraph.startsWith('"')) {
+                    return (
+                      <blockquote key={idx} className="italic border-l-4 border-gray-300 pl-4 my-4">
+                        {paragraph}
+                      </blockquote>
+                    );
+                  }
+
+                  // 일반 단락 - 적절한 들여쓰기와 줄간격
+                  return (
+                    <p key={idx} className="indent-4 my-4 leading-relaxed">
+                      {paragraph}
+                    </p>
+                  );
+                })
+              }
             </div>
 
             {/* 뉴스 원문 링크 */}

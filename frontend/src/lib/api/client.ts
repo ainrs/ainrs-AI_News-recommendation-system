@@ -5,8 +5,8 @@
 
 import { type News, type NewsSummary, NewsSearchQuery, type HealthCheckResponse } from './types';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000/api/v1';
-const API_TIMEOUT = 10000; // 10초 타임아웃
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
+const API_TIMEOUT = 30000; // 30초 타임아웃 (신뢰도 분석, RAG 검색 등 시간이 오래 걸리는 작업을 위해 증가)
 
 /**
  * API 요청을 처리하는 기본 함수
@@ -88,6 +88,10 @@ async function fetchApi<T = unknown>(
   } catch (error) {
     // 네트워크 오류 또는 기타 예외 처리
     if (error instanceof Error) {
+      if (error.name === 'AbortError') {
+        console.error(`❌ API 요청 실패(타임아웃): ${options.method || 'GET'} ${url} - 요청이 시간 초과로 중단되었습니다.`);
+        throw new Error('API 요청 실패: 요청이 시간 초과로 중단되었습니다.');
+      }
       console.error(`❌ API 요청 실패: ${options.method || 'GET'} ${url} - ${error.message}`);
       throw new Error(`API 요청 실패: ${error.message}`);
     } else {
@@ -125,7 +129,12 @@ async function fetchApiWithRetry<T = unknown>(
       lastError = error instanceof Error ? error : new Error('알 수 없는 오류');
 
       // 연결 거부 오류인 경우만 재시도 (서버가 준비 중)
-      if (lastError.message.includes('Failed to fetch')) {
+      if (
+        lastError.message.includes('Failed to fetch') ||
+        lastError.message.includes('시간 초과') ||
+        lastError.message.includes('timeout') ||
+        lastError.message.includes('중단되었습니다')
+      ) {
         // 마지막 시도가 아니면 계속 진행
         if (attempt < maxRetries) continue;
       } else {
@@ -138,6 +147,50 @@ async function fetchApiWithRetry<T = unknown>(
   // 모든 시도 실패 시
   throw lastError;
 }
+
+/**
+ * 백엔드 서버 연결 상태 확인
+ * 연결 가능 여부와 기본 상태를 반환합니다.
+ */
+export const checkBackendConnection = async (): Promise<{
+  connected: boolean;
+  status?: string;
+  message?: string;
+}> => {
+  try {
+    // 타임아웃이 짧은 빠른 헬스체크
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 3000);
+
+    const response = await fetch(`${API_BASE_URL}/api/v1/health`, {
+      signal: controller.signal
+    });
+
+    clearTimeout(timeoutId);
+
+    if (response.ok) {
+      const data = await response.json();
+      return {
+        connected: true,
+        status: data.status,
+        message: '백엔드 서버에 연결되었습니다.'
+      };
+    } else {
+      return {
+        connected: false,
+        status: 'error',
+        message: `백엔드 서버 응답 오류: ${response.status} ${response.statusText}`
+      };
+    }
+  } catch (error) {
+    // 연결 실패
+    return {
+      connected: false,
+      status: 'disconnected',
+      message: '백엔드 서버에 연결할 수 없습니다. 서버가 실행 중인지 확인하세요.'
+    };
+  }
+};
 
 /**
  * API 클라이언트
@@ -166,7 +219,7 @@ export const apiClient = {
           token_type: string;
           user_id: string;
           username: string;
-        }>('/api/v1/auth/login', {
+        }>('/api/v1/api/auth/login', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/x-www-form-urlencoded',
@@ -175,7 +228,9 @@ export const apiClient = {
         });
         return response;
       } catch (error) {
-        console.error('로그인 중 오류:', error);
+        if (error instanceof Error) {
+          throw new Error(`로그인 중 오류: ${error.message}`);
+        }
         throw error;
       }
     },
@@ -195,7 +250,7 @@ export const apiClient = {
           message: string;
           user_id: string;
           verification_required?: boolean;
-        }>('/api/v1/auth/register', {
+        }>('/api/v1/api/auth/register', {
           method: 'POST',
           body: JSON.stringify({
             username,
@@ -204,7 +259,9 @@ export const apiClient = {
           }),
         });
       } catch (error) {
-        console.error('회원가입 중 오류:', error);
+        if (error instanceof Error) {
+          throw new Error(`회원가입 중 오류: ${error.message}`);
+        }
         throw error;
       }
     },
@@ -222,12 +279,14 @@ export const apiClient = {
           status: string;
           message: string;
           expires_in_minutes: number;
-        }>('/api/v1/email/send-verification-code', {
+        }>('/api/v1/api/email/send-verification-code', {
           method: 'POST',
           body: JSON.stringify({ email }),
         });
       } catch (error) {
-        console.error('인증 코드 요청 중 오류:', error);
+        if (error instanceof Error) {
+          throw new Error(`인증 코드 요청 중 오류: ${error.message}`);
+        }
         throw error;
       }
     },
@@ -245,12 +304,14 @@ export const apiClient = {
           status: string;
           message: string;
           verified: boolean;
-        }>('/api/v1/email/verify-code', {
+        }>('/api/v1/api/email/verify-code', {
           method: 'POST',
           body: JSON.stringify({ email, code }),
         });
       } catch (error) {
-        console.error('인증 코드 확인 중 오류:', error);
+        if (error instanceof Error) {
+          throw new Error(`인증 코드 확인 중 오류: ${error.message}`);
+        }
         throw error;
       }
     },
@@ -279,10 +340,12 @@ export const apiClient = {
       const query = queryParams.toString();
       try {
         // 재시도 로직 사용 (최대 3번, 2초 간격)
-        return await fetchApiWithRetry<News[]>(`/news?${query}`, {}, 3, 2000);
+        return await fetchApiWithRetry<News[]>(`/api/v1/news?${query}`, {}, 3, 2000);
       } catch (error) {
-        console.error('뉴스 목록을 가져오는 중 오류:', error);
-        return [];
+        if (error instanceof Error) {
+          throw new Error(`뉴스 목록을 가져오는 중 오류: ${error.message}`);
+        }
+        throw error;
       }
     },
 
@@ -291,9 +354,11 @@ export const apiClient = {
      */
     getById: async (id: string): Promise<News> => {
       try {
-        return await fetchApi<News>(`/news/${id}`);
+        return await fetchApi<News>(`/api/v1/news/${id}`);
       } catch (error) {
-        console.error(`ID ${id}의 뉴스를 가져오는 중 오류:`, error);
+        if (error instanceof Error) {
+          throw new Error(`ID ${id}의 뉴스를 가져오는 중 오류: ${error.message}`);
+        }
         throw error;
       }
     },
@@ -303,13 +368,15 @@ export const apiClient = {
      */
     search: async (query: string): Promise<News[]> => {
       try {
-        return await fetchApi<News[]>('/news/search', {
+        return await fetchApi<News[]>('/api/v1/news/search', {
           method: 'POST',
           body: JSON.stringify({ query }),
         });
       } catch (error) {
-        console.error('뉴스 검색 중 오류:', error);
-        return [];
+        if (error instanceof Error) {
+          throw new Error(`뉴스 검색 중 오류: ${error.message}`);
+        }
+        throw error;
       }
     },
 
@@ -319,10 +386,12 @@ export const apiClient = {
     getTrending: async (limit = 10): Promise<NewsSummary[]> => {
       try {
         // 재시도 로직 사용 (최대 3번, 2초 간격)
-        return await fetchApiWithRetry<NewsSummary[]>(`/news/trending?limit=${limit}`, {}, 3, 2000);
+        return await fetchApiWithRetry<NewsSummary[]>(`/api/v1/recommendation/trending?limit=${limit}`, {}, 3, 2000);
       } catch (error) {
-        console.error('트렌딩 뉴스를 가져오는 중 오류:', error);
-        return [];
+        if (error instanceof Error) {
+          throw new Error(`트렌딩 뉴스를 가져오는 중 오류: ${error.message}`);
+        }
+        throw error;
       }
     },
 
@@ -333,9 +402,8 @@ export const apiClient = {
     getColdStartRecommendations: async (limit = 5): Promise<NewsSummary[]> => {
       try {
         // 재시도 로직 사용 (최대 3번, 2초 간격)
-        return await fetchApiWithRetry<NewsSummary[]>(`/news/cold-start?limit=${limit}`, {}, 3, 2000);
+        return await fetchApiWithRetry<NewsSummary[]>(`/api/v1/recommendation/news/cold-start?limit=${limit}`, {}, 3, 2000);
       } catch (error) {
-        console.error('콜드 스타트 추천 뉴스를 가져오는 중 오류:', error);
         // 오류 시 트렌딩 뉴스로 폴백
         return await apiClient.news.getTrending(limit);
       }
@@ -346,13 +414,15 @@ export const apiClient = {
      */
     searchByKeyword: async (keyword: string, limit = 20): Promise<News[]> => {
       try {
-        return await fetchApi<News[]>('/news/search', {
+        return await fetchApi<News[]>('/api/v1/news/search', {
           method: 'POST',
           body: JSON.stringify({ query: keyword, limit }),
         });
       } catch (error) {
-        console.error(`키워드 '${keyword}'로 뉴스를 검색하는 중 오류:`, error);
-        return [];
+        if (error instanceof Error) {
+          throw new Error(`키워드 '${keyword}'로 뉴스를 검색하는 중 오류: ${error.message}`);
+        }
+        throw error;
       }
     },
 
@@ -361,10 +431,12 @@ export const apiClient = {
      */
     getComments: async (newsId: string): Promise<Comment[]> => {
       try {
-        return await fetchApi<Comment[]>(`/news/${newsId}/comments`);
+        return await fetchApi<Comment[]>(`/api/v1/news/${newsId}/comments`);
       } catch (error) {
-        console.error(`뉴스 ${newsId}의 댓글을 가져오는 중 오류:`, error);
-        return [];
+        if (error instanceof Error) {
+          throw new Error(`뉴스 ${newsId}의 댓글을 가져오는 중 오류: ${error.message}`);
+        }
+        throw error;
       }
     },
 
@@ -373,7 +445,7 @@ export const apiClient = {
      */
     addComment: async (newsId: string, userId: string, content: string): Promise<Comment> => {
       try {
-        return await fetchApi<Comment>(`/news/${newsId}/comments`, {
+        return await fetchApi<Comment>(`/api/v1/news/${newsId}/comments`, {
           method: 'POST',
           body: JSON.stringify({
             user_id: userId,
@@ -381,7 +453,9 @@ export const apiClient = {
           }),
         });
       } catch (error) {
-        console.error(`뉴스 ${newsId}에 댓글을 작성하는 중 오류:`, error);
+        if (error instanceof Error) {
+          throw new Error(`뉴스 ${newsId}에 댓글을 작성하는 중 오류: ${error.message}`);
+        }
         throw error;
       }
     },
@@ -391,9 +465,8 @@ export const apiClient = {
      */
     getStats: async (newsId: string): Promise<NewsStats> => {
       try {
-        return await fetchApi<NewsStats>(`/news/${newsId}/stats`);
+        return await fetchApi<NewsStats>(`/api/v1/news/${newsId}/stats`);
       } catch (error) {
-        console.error(`뉴스 ${newsId}의 통계를 가져오는 중 오류:`, error);
         return { views: 0, likes: 0, comments: 0, shares: 0 };
       }
     },
@@ -403,7 +476,7 @@ export const apiClient = {
      */
     toggleBookmark: async (newsId: string, userId: string, bookmarked: boolean): Promise<{ success: boolean }> => {
       try {
-        return await fetchApi<{ success: boolean }>(`/news/${newsId}/bookmark`, {
+        return await fetchApi<{ success: boolean }>(`/api/v1/news/${newsId}/bookmark`, {
           method: 'POST',
           body: JSON.stringify({
             user_id: userId,
@@ -411,7 +484,6 @@ export const apiClient = {
           }),
         });
       } catch (error) {
-        console.error(`뉴스 ${newsId}의 북마크 상태를 변경하는 중 오류:`, error);
         return { success: false };
       }
     },
@@ -426,9 +498,8 @@ export const apiClient = {
      */
     getRecommendations: async (userId: string, limit = 10): Promise<NewsSummary[]> => {
       try {
-        return await fetchApi<NewsSummary[]>(`/recommendations/${userId}?limit=${limit}`);
+        return await fetchApi<NewsSummary[]>(`/api/v1/recommendations/${userId}?limit=${limit}`);
       } catch (error) {
-        console.error(`사용자 ${userId}의 추천 뉴스를 가져오는 중 오류:`, error);
         return [];
       }
     },
@@ -442,7 +513,7 @@ export const apiClient = {
       interactionType: 'view' | 'click' | 'read' | 'like' | 'share'
     ): Promise<{ message: string }> => {
       try {
-        return await fetchApi<{ message: string }>('/interaction', {
+        return await fetchApi<{ message: string }>('/api/v1/interaction', {
           method: 'POST',
           body: JSON.stringify({
             user_id: userId,
@@ -451,7 +522,6 @@ export const apiClient = {
           }),
         });
       } catch (error) {
-        console.error(`사용자 상호작용 기록 중 오류:`, error);
         return { message: '상호작용 기록 실패' };
       }
     },
@@ -461,12 +531,11 @@ export const apiClient = {
      */
     getUserInteractions: async (userId: string, newsId?: string): Promise<UserInteractions> => {
       const endpoint = newsId
-        ? `/user-interactions?userId=${userId}&newsId=${newsId}`
-        : `/user-interactions?userId=${userId}`;
+        ? `/api/v1/user-interactions?userId=${userId}&newsId=${newsId}`
+        : `/api/v1/user-interactions?userId=${userId}`;
       try {
         return await fetchApi<UserInteractions>(endpoint);
       } catch (error) {
-        console.error(`사용자 상호작용 이력 조회 중 오류:`, error);
         return { userId, interactions: [] };
       }
     },
@@ -481,13 +550,12 @@ export const apiClient = {
      */
     getTextEmbedding: async (text: string): Promise<number[]> => {
       try {
-        const res = await fetchApi<{ embedding: number[] }>('/text/embeddings', {
+        const res = await fetchApi<{ embedding: number[] }>('/api/v1/text/embeddings', {
           method: 'POST',
           body: JSON.stringify({ text }),
         });
         return res.embedding;
       } catch (error) {
-        console.error('텍스트 임베딩 생성 중 오류:', error);
         return [];
       }
     },
@@ -497,12 +565,8 @@ export const apiClient = {
      */
     searchNewsByVector: async (query: string, limit = 10): Promise<NewsSummary[]> => {
       try {
-        return await fetchApi<NewsSummary[]>('/rag/search', {
-          method: 'POST',
-          body: JSON.stringify({ query, limit }),
-        });
+        return await fetchApi<NewsSummary[]>(`/api/v1/rag/search?query=${encodeURIComponent(query)}&limit=${limit}`);
       } catch (error) {
-        console.error('뉴스 벡터 검색 중 오류:', error);
         return [];
       }
     },
@@ -512,12 +576,11 @@ export const apiClient = {
      */
     askQuestionAboutNews: async (newsId: string, question: string): Promise<{ answer: string }> => {
       try {
-        return await fetchApi<{ answer: string }>(`/news/${newsId}/ask`, {
+        return await fetchApi<{ answer: string }>(`/api/v1/news/${newsId}/ask`, {
           method: 'POST',
           body: JSON.stringify({ question }),
         });
       } catch (error) {
-        console.error(`뉴스 ${newsId}에 대한 질문 처리 중 오류:`, error);
         return { answer: '답변을 가져오지 못했습니다.' };
       }
     },
@@ -531,15 +594,21 @@ export const apiClient = {
       trust_factors: Record<string, number>;
     }> => {
       try {
+        // ObjectId 형식 문제를 피하기 위해 백엔드에서 문자열 ID도 받을 수 있도록 수정됐다고 가정합니다
+        // 오류 방지를 위해 news 뿐만 아니라 AI 분석 경로도 확인
+        // news ID 검증을 추가하여 올바른 형식만 요청
+        if (!newsId || typeof newsId !== 'string' || newsId.length < 5) {
+          throw new Error("유효하지 않은 뉴스 ID");
+        }
+
         return await fetchApi<{
           news_id: string;
           trust_score: number;
           trust_factors: Record<string, number>;
-        }>(`/news/${newsId}/trust-analysis`, {
+        }>(`/api/v1/news/${newsId}/trust-analysis`, {
           method: 'POST',
         });
       } catch (error) {
-        console.error(`뉴스 ${newsId}의 신뢰도 분석 중 오류:`, error);
         return {
           news_id: newsId,
           trust_score: 0,
@@ -571,11 +640,10 @@ export const apiClient = {
             negative: number;
             neutral: number;
           }
-        }>(`/news/${newsId}/sentiment-analysis`, {
+        }>(`/api/v1/news/${newsId}/sentiment-analysis`, {
           method: 'POST',
         });
       } catch (error) {
-        console.error(`뉴스 ${newsId}의 감정 분석 중 오류:`, error);
         return {
           news_id: newsId,
           sentiment: {
@@ -600,11 +668,10 @@ export const apiClient = {
         return await fetchApi<{
           news_id: string;
           key_phrases: string[];
-        }>(`/news/${newsId}/key-phrases?limit=${limit}`, {
+        }>(`/api/v1/news/${newsId}/key-phrases?limit=${limit}`, {
           method: 'POST',
         });
       } catch (error) {
-        console.error(`뉴스 ${newsId}의 키워드 추출 중 오류:`, error);
         return {
           news_id: newsId,
           key_phrases: [],
@@ -623,11 +690,10 @@ export const apiClient = {
         return await fetchApi<{
           news_id: string;
           summary: string;
-        }>(`/news/${newsId}/summarize?max_length=${max_length}`, {
+        }>(`/api/v1/news/${newsId}/summarize?max_length=${max_length}`, {
           method: 'POST',
         });
       } catch (error) {
-        console.error(`뉴스 ${newsId}의 요약 중 오류:`, error);
         return {
           news_id: newsId,
           summary: '',
@@ -640,9 +706,8 @@ export const apiClient = {
      */
     getCollaborativeFilteringRecommendations: async (userId: string, limit = 10): Promise<NewsSummary[]> => {
       try {
-        return await fetchApi<NewsSummary[]>(`/collaborative-filtering/recommendations/${userId}?limit=${limit}`);
+        return await fetchApi<NewsSummary[]>(`/api/v1/collaborative-filtering/recommendations/${userId}?limit=${limit}`);
       } catch (error) {
-        console.error(`협업 필터링 추천 중 오류:`, error);
         return [];
       }
     },
@@ -658,9 +723,8 @@ export const apiClient = {
         return await fetchApi<{
           user_id: string;
           similar_users: Array<{ user_id: string; similarity: number }>
-        }>(`/collaborative-filtering/similar-users/${userId}?limit=${limit}`);
+        }>(`/api/v1/collaborative-filtering/similar-users/${userId}?limit=${limit}`);
       } catch (error) {
-        console.error(`유사한 사용자 찾기 중 오류:`, error);
         return {
           user_id: userId,
           similar_users: [],
@@ -673,9 +737,8 @@ export const apiClient = {
      */
     getPersonalizedNews: async (userId: string, limit = 8): Promise<NewsSummary[]> => {
       try {
-        return await fetchApi<NewsSummary[]>(`/recommendation/personalized/${userId}?limit=${limit}`);
+        return await fetchApi<NewsSummary[]>(`/api/v1/recommendation/personalized/${userId}?limit=${limit}`);
       } catch (error) {
-        console.error(`개인화된 뉴스 추천 중 오류:`, error);
         return [];
       }
     },
@@ -685,12 +748,11 @@ export const apiClient = {
      */
     getInterestBasedNews: async (categories: string[], limit = 8): Promise<NewsSummary[]> => {
       try {
-        return await fetchApi<NewsSummary[]>('/recommendation/interests', {
+        return await fetchApi<NewsSummary[]>('/api/v1/recommendation/interests', {
           method: 'POST',
           body: JSON.stringify({ categories, limit }),
         });
       } catch (error) {
-        console.error('관심사 기반 뉴스 추천 중 오류:', error);
         return [];
       }
     },
@@ -714,9 +776,8 @@ export const apiClient = {
           shares: number;
           category_distribution: Record<string, number>;
           source_distribution: Record<string, number>;
-        }>(`/users/stats/${userId}?days=${days}`);
+        }>(`/api/v1/users/stats/${userId}?days=${days}`);
       } catch (error) {
-        console.error(`사용자 ${userId}의 상호작용 통계 조회 중 오류:`, error);
         return {
           views: 0,
           likes: 0,
@@ -737,7 +798,6 @@ export const apiClient = {
       try {
         return await fetchApi<News[]>(endpoint);
       } catch (error) {
-        console.error('RSS 피드 데이터를 가져오는 중 오류:', error);
         return [];
       }
     },
@@ -747,11 +807,10 @@ export const apiClient = {
      */
     startRSSCrawling: async (): Promise<{ message: string }> => {
       try {
-        return await fetchApi<{ message: string }>('/crawl', {
+        return await fetchApi<{ message: string }>('/api/v1/crawl', {
           method: 'POST',
         });
       } catch (error) {
-        console.error('RSS 크롤링 작업 시작 중 오류:', error);
         return { message: '크롤링 시작 실패' };
       }
     },
@@ -761,9 +820,8 @@ export const apiClient = {
      */
     getModelsStatus: async (): Promise<Record<string, { status: string; type: string }>> => {
       try {
-        return await fetchApi<Record<string, { status: string; type: string }>>('/models/status');
+        return await fetchApi<Record<string, { status: string; type: string }>>('/api/v1/models/status');
       } catch (error) {
-        console.error('모델 상태 확인 중 오류:', error);
         return {};
       }
     },
@@ -785,9 +843,8 @@ export const apiClient = {
           embedding_service: { status: string; error?: string };
           vector_store: { status: string; error?: string };
           overall_status: string;
-        }>('/diagnostics');
+        }>('/api/v1/diagnostics');
       } catch (error) {
-        console.error('진단 실행 중 오류:', error);
         return {
           mongodb: { status: 'unknown' },
           openai_api: { status: 'unknown' },
@@ -804,9 +861,8 @@ export const apiClient = {
    */
   health: async (): Promise<HealthCheckResponse> => {
     try {
-      return await fetchApi<HealthCheckResponse>('/health');
+      return await fetchApi<HealthCheckResponse>('/api/v1/health');
     } catch (error) {
-      console.error('헬스 체크 중 오류:', error);
       return { status: 'unhealthy' } as HealthCheckResponse;
     }
   },

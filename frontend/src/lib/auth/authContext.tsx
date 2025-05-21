@@ -71,7 +71,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const restoreAuth = () => {
       try {
-        // SSR에서 localStorage를 접근할 수 없으므로 확인 필요
         if (typeof window === 'undefined') return;
 
         setState(prev => ({ ...prev, isLoading: true }));
@@ -80,7 +79,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (storedAuth) {
           const { user, expiry } = JSON.parse(storedAuth);
 
-          // 만료 시간 확인
           if (expiry && new Date(expiry) > new Date()) {
             setState({
               user,
@@ -91,7 +89,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             return;
           }
 
-          // 만료된 경우 로컬 스토리지 정리
           localStorage.removeItem(AUTH_STORAGE_KEY);
         }
 
@@ -113,7 +110,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // 인증 정보 저장 함수
   const saveAuthToStorage = (user: User) => {
     try {
-      // 24시간 유효한 만료 시간 설정
       const expiryDate = new Date();
       expiryDate.setHours(expiryDate.getHours() + 24);
 
@@ -137,13 +133,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // 백엔드 API로 로그인 요청
       const response = await apiClient.auth.login(username, password);
 
+      // 응답 데이터 확인
+      if (!response || !response.access_token || !response.user_id) {
+        throw new Error('서버 응답에 필요한 인증 정보가 없습니다.');
+      }
+
       const user: User = {
         id: response.user_id,
         username: response.username,
         accessToken: response.access_token,
       };
 
-      // 상태 업데이트 및 스토리지 저장
       setState({
         user,
         isAuthenticated: true,
@@ -154,19 +154,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       saveAuthToStorage(user);
       return true;
     } catch (err) {
+      console.error('로그인 오류:', err);
       let errorMessage = '로그인 중 오류가 발생했습니다';
 
       if (err instanceof Error) {
-        errorMessage = err.message;
+        if (err.message.includes('Failed to fetch') || err.message.includes('연결할 수 없습니다')) {
+          errorMessage = '서버에 연결할 수 없습니다. 서버가 실행 중인지 확인해주세요.';
+        } else if (err.message.includes('401')) {
+          errorMessage = '사용자 이름 또는 비밀번호가 올바르지 않습니다.';
+        } else if (err.message.includes('404')) {
+          errorMessage = '로그인 API를 찾을 수 없습니다. API 서버 경로가 올바른지 확인해주세요.';
+        } else if (err.message.includes('/api/v1/api/auth/login')) {
+          errorMessage = 'API 경로가 올바르지 않습니다. 서버 관리자에게 문의해주세요.';
+        } else {
+          errorMessage = err.message;
+        }
       }
 
       setState(prev => ({
         ...prev,
-        user: null,
-        isAuthenticated: false,
         isLoading: false,
         error: errorMessage,
       }));
+
+      // 개발 전용 로깅
+      if (process.env.NODE_ENV === 'development') {
+        console.error('로그인 오류 상세:', err);
+      }
 
       return false;
     }
@@ -174,13 +188,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // 로그아웃 함수
   const logout = () => {
-    // 실제 환경에서는 백엔드 API로 로그아웃 요청
-    // apiClient.auth.logout();
-
-    // 로컬 스토리지에서 인증 정보 제거
     localStorage.removeItem(AUTH_STORAGE_KEY);
 
-    // 상태 초기화
     setState({
       user: null,
       isAuthenticated: false,
@@ -190,26 +199,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   // 회원가입 함수
-  const register = async (username: string, email: string, password: string): Promise<boolean> => {
+  const register = async (
+    username: string,
+    email: string,
+    password: string
+  ): Promise<boolean> => {
     setState(prev => ({ ...prev, isLoading: true, error: null }));
 
     try {
+      console.log('회원가입 시도 중:', { username, email });
+
       // 백엔드 API로 회원가입 요청
       const response = await apiClient.auth.register(username, email, password);
 
-      // 이메일 인증이 필요한 경우
+      console.log('회원가입 응답:', response);
+
       if (response.verification_required) {
+        // 이메일 인증이 필요한 경우
         setState(prev => ({
           ...prev,
           isLoading: false,
           error: null,
-          // 사용자는 아직 인증되지 않았으므로 로그인 상태로 설정하지 않음
         }));
 
-        // 인증이 필요하다는 정보를 로컬 스토리지에 저장
         localStorage.setItem('email_verification_pending', email);
 
-        return true; // 회원가입 자체는 성공했지만 이메일 인증이 필요함
+        return true;
       }
 
       // 이메일 인증이 필요없는 경우 바로 로그인 처리
@@ -217,10 +232,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         id: response.user_id,
         username,
         email,
-        accessToken: 'temporary_token', // 실제로는 로그인 과정을 통해 얻어야 함
+        accessToken: 'temporary_token',
       };
 
-      // 상태 업데이트 및 스토리지 저장
       setState({
         user,
         isAuthenticated: true,
@@ -234,17 +248,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       let errorMessage = '회원가입 중 오류가 발생했습니다';
 
       if (err instanceof Error) {
-        errorMessage = err.message;
+        if (err.message.includes('Failed to fetch') || err.message.includes('연결할 수 없습니다')) {
+          errorMessage = '서버에 연결할 수 없습니다. 서버가 실행 중인지 확인해주세요.';
+        } else if (err.message.includes('409') || err.message.includes('already exists')) {
+          errorMessage = '이미 등록된 사용자 이름 또는 이메일입니다.';
+        } else {
+          errorMessage = err.message;
+        }
       }
 
       setState(prev => ({
         ...prev,
-        user: null,
-        isAuthenticated: false,
         isLoading: false,
         error: errorMessage,
       }));
-
       return false;
     }
   };
@@ -254,21 +271,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setState(prev => ({ ...prev, isLoading: true, error: null }));
 
     try {
-      // 실제 환경에서는 백엔드 API로 프로필 업데이트 요청
-      // const response = await apiClient.auth.updateProfile(userData);
-
-      // 현재 사용자 정보가 없으면 실패
       if (!state.user) {
         throw new Error('로그인되지 않은 상태입니다');
       }
 
-      // 기존 사용자 정보와 업데이트 정보 병합
       const updatedUser: User = {
         ...state.user,
         ...userData,
       };
 
-      // 상태 업데이트 및 스토리지 저장
       setState(prev => ({
         ...prev,
         user: updatedUser,
@@ -327,10 +338,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const response = await apiClient.auth.verifyCode(email, code);
 
       if (response.verified) {
-        // 이메일 인증이 완료되면 보류 중인 인증 정보 삭제
         localStorage.removeItem('email_verification_pending');
-
-        // 여기서는 바로 로그인 상태를 만들지 않고, 로그인 페이지로 이동시키는 것이 안전합니다.
         setState(prev => ({ ...prev, isLoading: false }));
         return true;
       } else {
@@ -359,7 +367,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return localStorage.getItem('email_verification_pending');
   };
 
-  // 인증 컨텍스트 값
   const value: AuthContextType = {
     ...state,
     login,

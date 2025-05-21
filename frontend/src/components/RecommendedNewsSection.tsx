@@ -58,7 +58,7 @@ export default function RecommendedNewsSection({
   // 결과를 NewsForDisplay 형식으로 변환하는 함수
   const formatNewsData = (data: any[]): NewsForDisplay[] => {
     return data.map((item: any) => ({
-      id: item.id || item._id,
+      id: item.id || item._id || `news-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
       title: item.title,
       content: item.content || '',
       summary: item.summary || '',
@@ -228,8 +228,8 @@ export default function RecommendedNewsSection({
       <div className="space-y-3">
         {news.length > 0 ? (
           news.map((item) => (
-            <Card key={item.id} className="p-3 hover:shadow-md transition-shadow">
-              <Link href={`/news/${item.id}`} className="block">
+            <Card key={item.id || `rec-news-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`} className="p-3 hover:shadow-md transition-shadow">
+              <Link href={item.id ? `/news/${item.id}` : '#'} className="block">
                 <div className="flex gap-3">
                   {item.imageUrl ? (
                     <div className="w-16 h-16 relative rounded-md overflow-hidden flex-shrink-0">

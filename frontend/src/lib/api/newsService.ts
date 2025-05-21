@@ -115,7 +115,7 @@ export const newsService = {
    */
   formatNewsForDisplay: (news: News): NewsForDisplay => {
     return {
-      id: news._id,
+      id: news._id || news.id || `news-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
       title: news.title,
       content: news.content,
       summary: news.summary || '',

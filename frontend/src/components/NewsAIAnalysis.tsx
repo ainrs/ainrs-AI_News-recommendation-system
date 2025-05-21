@@ -117,7 +117,7 @@ export default function NewsAIAnalysis({
             </div>
           </TabsContent>
 
-          {/* 감정 분석 탭 */}
+          {/* 감정 분석 탭 - 개선된 UI */}
           <TabsContent value="sentiment" className="space-y-4">
             <div className="flex items-center">
               <div className="mr-3">
@@ -141,20 +141,45 @@ export default function NewsAIAnalysis({
             </div>
 
             {sentiment && (
-              <div className="grid grid-cols-3 gap-2 mt-4">
-                <div className="bg-green-50 p-3 rounded-md text-center">
-                  <div className="text-green-500 font-semibold">{(sentiment.positive * 100).toFixed(1)}%</div>
-                  <div className="text-xs text-muted-foreground">긍정적</div>
+              <>
+                {/* 감정 비율 막대 차트 */}
+                <div className="w-full h-8 flex rounded-md overflow-hidden mt-4">
+                  <div
+                    className="bg-green-500 h-full flex items-center justify-center text-xs font-bold text-white"
+                    style={{ width: `${sentiment.positive * 100}%` }}
+                  >
+                    {sentiment.positive > 0.15 && `${(sentiment.positive * 100).toFixed(0)}%`}
+                  </div>
+                  <div
+                    className="bg-blue-400 h-full flex items-center justify-center text-xs font-bold text-white"
+                    style={{ width: `${sentiment.neutral * 100}%` }}
+                  >
+                    {sentiment.neutral > 0.15 && `${(sentiment.neutral * 100).toFixed(0)}%`}
+                  </div>
+                  <div
+                    className="bg-red-500 h-full flex items-center justify-center text-xs font-bold text-white"
+                    style={{ width: `${sentiment.negative * 100}%` }}
+                  >
+                    {sentiment.negative > 0.15 && `${(sentiment.negative * 100).toFixed(0)}%`}
+                  </div>
                 </div>
-                <div className="bg-blue-50 p-3 rounded-md text-center">
-                  <div className="text-blue-500 font-semibold">{(sentiment.neutral * 100).toFixed(1)}%</div>
-                  <div className="text-xs text-muted-foreground">중립적</div>
+
+                {/* 감정 비율 설명 */}
+                <div className="grid grid-cols-3 gap-2 mt-2 text-center">
+                  <div className="text-xs">
+                    <span className="inline-block w-3 h-3 bg-green-500 rounded-full mr-1"></span>
+                    긍정적 ({(sentiment.positive * 100).toFixed(1)}%)
+                  </div>
+                  <div className="text-xs">
+                    <span className="inline-block w-3 h-3 bg-blue-400 rounded-full mr-1"></span>
+                    중립적 ({(sentiment.neutral * 100).toFixed(1)}%)
+                  </div>
+                  <div className="text-xs">
+                    <span className="inline-block w-3 h-3 bg-red-500 rounded-full mr-1"></span>
+                    부정적 ({(sentiment.negative * 100).toFixed(1)}%)
+                  </div>
                 </div>
-                <div className="bg-red-50 p-3 rounded-md text-center">
-                  <div className="text-red-500 font-semibold">{(sentiment.negative * 100).toFixed(1)}%</div>
-                  <div className="text-xs text-muted-foreground">부정적</div>
-                </div>
-              </div>
+              </>
             )}
           </TabsContent>
 

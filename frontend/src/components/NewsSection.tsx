@@ -87,7 +87,13 @@ export function NewsSection({
         <div className={`grid grid-cols-1 ${view === 'grid' ? 'md:grid-cols-2' : ''} gap-6`}>
           {news.length > 0 ? (
             news.map((item) => (
-              <NewsCard key={item.id || `news-${item.title.replace(/\s+/g, '-')}-${Date.now()}`} news={item} />
+              <NewsCard
+                key={item.id || `news-${item.title.replace(/\s+/g, '-')}-${Date.now()}`}
+                news={{
+                  ...item,
+                  id: item.id || item._id || `news-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`
+                }}
+              />
             ))
           ) : (
             <div className="w-full text-center py-6">
@@ -149,7 +155,7 @@ function NewsCard({ news }: NewsCardProps) {
           )}
         </div>
         <h3 className="news-title mb-2">
-          <Link href={`/news/${news.id}`} className="hover:underline">
+          <Link href={news.id ? `/news/${news.id}` : '#'} className="hover:underline">
             {news.title}
           </Link>
         </h3>
