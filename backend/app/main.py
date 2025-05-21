@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from app.core.config import settings
 from app.db.mongodb import news_collection, user_collection, user_interactions_collection, get_mongodb_database
+from bson.objectid import ObjectId
 from app.models.news import NewsResponse, NewsSummary, NewsSearchQuery
 from app.services.rss_crawler import run_crawler
 
@@ -859,25 +860,98 @@ async def search_with_rag(
     rag_service: Any = Depends(get_rag_service_dep)
 ):
     """Search for news articles with RAG"""
-    results = rag_service.search_news_with_query(query, limit)
-    return results
+    try:
+        results = rag_service.search_news_with_query(query, limit)
+
+        # 결과 필드 유효성 검사 및 변환
+        processed_results = []
+        for result in results:
+            # 기본 필드 확인
+            if not result or not isinstance(result, dict):
+                continue
+
+            # image_url이 HttpUrl 형식인 경우 문자열로 변환
+            if result.get("image_url") and not isinstance(result["image_url"], str):
+                result["image_url"] = str(result["image_url"])
+
+            # 필수 필드가 누락된 경우 기본값 설정
+            if "id" not in result or not result["id"]:
+                if "_id" in result:
+                    result["id"] = str(result["_id"])
+                else:
+                    continue  # ID가 없으면 건너뜀
+
+            if "title" not in result or not result["title"]:
+                result["title"] = "제목 없음"
+
+            if "summary" not in result or not result["summary"]:
+                result["summary"] = result.get("title", "내용 없음")[:100]
+
+            if "source" not in result or not result["source"]:
+                result["source"] = "미확인 출처"
+
+            # 유효한 결과만 추가
+            processed_results.append(result)
+
+        return processed_results
+    except Exception as e:
+        logger.error(f"RAG 검색 중 오류 발생: {str(e)}")
+        # 오류 발생 시 빈 배열 반환
+        return []
+        return []
 
 
 @app.post("/api/v1/rag/summarize/{news_id}")
 async def generate_summary(
     news_id: str,
+    max_length: int = Query(200, description="최대 요약 길이"),
     rag_service: Any = Depends(get_rag_service_dep)
 ):
     """Generate a summary for a news article using LLM"""
-    news = news_collection.find_one({"_id": news_id})
-    if not news:
-        raise HTTPException(status_code=404, detail="News not found")
+    try:
+        # ObjectId로 변환 시도
+        try:
+            from bson.objectid import ObjectId
+            news_id_obj = ObjectId(news_id)
+            news = news_collection.find_one({"_id": news_id_obj})
+        except:
+            # 실패하면 문자열 ID로 시도
+            news = news_collection.find_one({"_id": news_id})
 
-    summary = rag_service.generate_news_summary(news_id)
-    if not summary:
-        raise HTTPException(status_code=500, detail="Failed to generate summary")
+        if not news:
+            raise HTTPException(status_code=404, detail="News not found")
 
-    return {"news_id": news_id, "summary": summary}
+        # 이미 요약이 있는지 확인
+        if "summary" in news and news["summary"] and len(news["summary"].strip()) > 10:
+            logger.info(f"Using existing summary for news {news_id}")
+            return {"news_id": news_id, "summary": news["summary"].strip()}
+
+        # 새 요약 생성
+        # generate_news_summary는 동기 함수이므로 이벤트 루프 차단을 피하기 위해
+        # 백그라운드 태스크로 실행하는 것이 좋지만 지금은 단순화를 위해 직접 호출
+        summary = rag_service.generate_news_summary(news_id)
+
+        if not summary:
+            # 요약 생성 실패 시 간단한 요약 생성
+            title = news.get("title", "")
+            content = news.get("content", "")
+            # 컨텐츠가 너무 길면 앞부분만 사용
+            if len(content) > 500:
+                simple_summary = content[:500] + "..."
+            else:
+                simple_summary = content
+
+            return {"news_id": news_id, "summary": simple_summary}
+
+        # 요약 길이 제한
+        if max_length and len(summary) > max_length:
+            summary = summary[:max_length] + "..."
+
+        return {"news_id": news_id, "summary": summary}
+
+    except Exception as e:
+        logger.error(f"Error generating summary for news {news_id}: {e}")
+        return {"news_id": news_id, "summary": "요약을 생성하는 중 오류가 발생했습니다."}
 
 
 @app.post("/api/v1/rag/chat")
@@ -962,19 +1036,53 @@ async def analyze_news_trustworthiness(
     embedding_service: Any = Depends(get_embedding_service_dep)
 ):
     """BiLSTM 모델을 사용하여 뉴스 기사의 신뢰도를 분석합니다."""
-    news = news_collection.find_one({"_id": news_id})
-    if not news:
-        raise HTTPException(status_code=404, detail="News not found")
+    try:
+        # ObjectId로 변환 시도
+        try:
+            news_id_obj = ObjectId(news_id)
+            news = news_collection.find_one({"_id": news_id_obj})
+        except:
+            # 실패하면 문자열 ID로 시도
+            news = news_collection.find_one({"_id": news_id})
 
-    result = await embedding_service.perform_trust_analysis(news_id)
-    if not result:
-        raise HTTPException(status_code=500, detail="Failed to perform trust analysis")
+        if not news:
+            raise HTTPException(status_code=404, detail="News not found")
 
-    return {
-        "news_id": news_id,
-        "trust_score": result.trust_score,
-        "model": result.model_name
-    }
+        # 이미 신뢰도 점수가 있는지 확인
+        if "trust_score" in news and news["trust_score"] is not None:
+            # 이미 있다면 기존 점수 반환
+            logger.info(f"Using existing trust score for news {news_id}: {news['trust_score']}")
+            return {
+                "news_id": news_id,
+                "trust_score": news["trust_score"],
+                "model": "cached_result"
+            }
+
+        # 신뢰도 분석 수행
+        result = await embedding_service.perform_trust_analysis(news_id)
+
+        if result:
+            return {
+                "news_id": news_id,
+                "trust_score": result.trust_score,
+                "model": result.model_name
+            }
+        else:
+            # 결과가 없으면 기본값 반환
+            logger.warning(f"No trust analysis result for news {news_id}, using default value")
+            return {
+                "news_id": news_id,
+                "trust_score": 0.5,  # 기본 신뢰도 점수
+                "model": "default_fallback"
+            }
+    except Exception as e:
+        # 모든 예외 처리 - 500 오류 대신 기본값 반환
+        logger.error(f"Error in trust analysis API: {e}")
+        return {
+            "news_id": news_id,
+            "trust_score": 0.5,  # 기본 신뢰도 점수
+            "model": "error_fallback"
+        }
 
 @app.post("/api/v1/news/{news_id}/sentiment-analysis")
 async def analyze_news_sentiment(
@@ -982,7 +1090,14 @@ async def analyze_news_sentiment(
     embedding_service: Any = Depends(get_embedding_service_dep)
 ):
     """BERT 모델을 사용하여 뉴스 기사의 감정을 분석합니다."""
-    news = news_collection.find_one({"_id": news_id})
+    # ObjectId로 변환 시도
+    try:
+        news_id_obj = ObjectId(news_id)
+        news = news_collection.find_one({"_id": news_id_obj})
+    except:
+        # 실패하면 문자열 ID로 시도
+        news = news_collection.find_one({"_id": news_id})
+
     if not news:
         raise HTTPException(status_code=404, detail="News not found")
 

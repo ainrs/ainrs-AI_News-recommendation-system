@@ -2,6 +2,7 @@ import os
 import logging
 from typing import Dict, List, Any, Optional
 from datetime import datetime, timedelta
+from bson.objectid import ObjectId  # MongoDB ObjectId 추가
 
 # LangChain (정확한 최신 import 위치)
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
@@ -12,8 +13,6 @@ from langchain_core.documents import Document
 from langchain.prompts import ChatPromptTemplate
 from langchain.chains import LLMChain, ConversationalRetrievalChain
 from langchain.memory import ConversationBufferMemory
-
-
 
 # MongoDB
 from app.db.mongodb import (
@@ -76,7 +75,31 @@ class RAGService:
     def _init_vectorstores(self):
         """Initialize vector stores (both Chroma and FAISS)"""
         try:
-            # Try to load existing Chroma DB
+            # 기존 Chroma DB 폴더 검사
+            if os.path.exists(self.chroma_dir):
+                import shutil
+                # 손상된 DB일 수 있으므로 DB 파일 검사
+                try:
+                    # DB 파일 검사 및 필요 시 삭제
+                    sqlite_file = os.path.join(self.chroma_dir, "chroma.sqlite3")
+                    if os.path.exists(sqlite_file):
+                        try:
+                            # sqlite3 파일 유효성 검사
+                            import sqlite3
+                            conn = sqlite3.connect(sqlite_file)
+                            cursor = conn.cursor()
+                            cursor.execute("PRAGMA integrity_check")
+                            conn.close()
+                            logger.info("Chroma DB integrity check passed")
+                        except Exception as db_err:
+                            # 손상된 파일 삭제
+                            logger.error(f"Chroma DB integrity check failed: {db_err}")
+                            os.remove(sqlite_file)
+                            logger.info(f"Removed corrupted Chroma DB file")
+                except Exception as rm_err:
+                    logger.warning(f"Failed to check/remove Chroma DB file: {rm_err}")
+
+            # Chroma DB 생성 시도
             self.chroma_vectorstore = Chroma(
                 collection_name="news_embeddings",
                 embedding_function=self.embeddings,
@@ -86,13 +109,29 @@ class RAGService:
         except Exception as e:
             # If loading fails, create a new one
             logger.warning(f"Could not load Chroma DB: {e}. Creating a new one.")
-            self.chroma_vectorstore = Chroma(
-                collection_name="news_embeddings",
-                embedding_function=self.embeddings,
-                persist_directory=self.chroma_dir
-            )
-            # Save empty vectorstore
-            self.chroma_vectorstore.persist()
+            # 인메모리 인스턴스로 먼저 만들고
+            try:
+                self.chroma_vectorstore = Chroma(
+                    collection_name="news_embeddings",
+                    embedding_function=self.embeddings
+                )
+                # 그 다음 디스크에 저장
+                self.chroma_vectorstore = Chroma(
+                    collection_name="news_embeddings",
+                    embedding_function=self.embeddings,
+                    persist_directory=self.chroma_dir
+                )
+                # Save empty vectorstore
+                self.chroma_vectorstore.persist()
+                logger.info("Successfully created new Chroma DB")
+            except Exception as create_err:
+                # 최후의 수단: 인메모리만 사용
+                logger.error(f"Failed to create persistent Chroma DB: {create_err}")
+                self.chroma_vectorstore = Chroma(
+                    collection_name="news_embeddings",
+                    embedding_function=self.embeddings
+                )
+                logger.warning("Using in-memory Chroma vectorstore as fallback")
 
         # For FAISS, check if index file exists
         faiss_index_path = os.path.join(self.faiss_dir, "index.faiss")
@@ -242,7 +281,12 @@ class RAGService:
             metadata = doc.metadata
 
             # Get full news article from database for complete information
-            news = news_collection.find_one({"_id": metadata["news_id"]})
+            try:
+                news_id_obj = ObjectId(metadata["news_id"])
+                news = news_collection.find_one({"_id": news_id_obj})
+            except:
+                # 실패하면 문자열 ID로 시도
+                news = news_collection.find_one({"_id": metadata["news_id"]})
             if news:
                 result = {
                     "id": news["_id"],

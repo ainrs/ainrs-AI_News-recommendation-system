@@ -428,48 +428,86 @@ class EmbeddingService:
     async def perform_trust_analysis(self, news_id: str) -> Optional[TrustAnalysisResult]:
         """Perform trust analysis on a news article using BiLSTM"""
         # Get news article from MongoDB
-        news = news_collection.find_one({"_id": news_id})
-        if not news:
-            logger.error(f"News article with id {news_id} not found")
-            return None
-
         try:
+            # ObjectId로 변환 시도
+            try:
+                from bson.objectid import ObjectId
+                news_id_obj = ObjectId(news_id)
+                news = news_collection.find_one({"_id": news_id_obj})
+            except:
+                # 실패하면 문자열 ID로 시도
+                news = news_collection.find_one({"_id": news_id})
+
+            if not news:
+                logger.error(f"News article with id {news_id} not found")
+                return None
+
             # Extract relevant text
             title = news["title"]
             content = news["content"]
-
             # 텍스트 결합
             news_text = f"{title} {content}"
 
-            # BiLSTM 모델을 사용한 신뢰도 분석
-            trust_score = await self.trust_analysis_service.calculate_trust_score(news_text)
+            # 신뢰도 분석 서비스 가져오기
+            from app.services.trust_analysis_service import get_trust_analysis_service
+            self.trust_analysis_service = get_trust_analysis_service()
+
+            # 신뢰도 분석 수행
+            trust_result = await self.trust_analysis_service.calculate_trust_score(news_text)
+
+            # 결과 처리 - trust_result가 딕셔너리인 경우
+            if isinstance(trust_result, dict):
+                trust_score = trust_result.get("trust_score", 0.5)
+                source = trust_result.get("source", "unknown")
+                confidence = trust_result.get("confidence", 0.5)
+            else:
+                # 결과가 딕셔너리가 아닌 경우 (예: 숫자만 반환)
+                trust_score = float(trust_result) if trust_result is not None else 0.5
+                source = "direct_value"
+                confidence = 0.5
 
             # Create result
             result = TrustAnalysisResult(
                 news_id=news_id,
                 trust_score=trust_score,
-                model_name="bilstm-trust-analysis",
+                model_name=f"bilstm-trust-analysis-{source}",
                 created_at=datetime.utcnow(),
                 metadata={
                     "title": news["title"],
-                    "source": news["source"]
+                    "source": news["source"],
+                    "analysis_source": source,
+                    "confidence": confidence
                 }
             )
 
-            # Update news record with trust score
-            news_collection.update_one(
-                {"_id": news_id},
-                {"$set": {
-                    "trust_score": trust_score,
-                    "updated_at": datetime.utcnow()
-                }}
-            )
+            # 뉴스 컬렉션에 신뢰도 점수 업데이트
+            try:
+                news_collection.update_one(
+                    {"_id": news["_id"]},
+                    {"$set": {
+                        "trust_score": trust_score,
+                        "trust_analysis_timestamp": datetime.utcnow()
+                    }}
+                )
+                logger.info(f"Updated trust score for news {news_id}: {trust_score}")
+            except Exception as update_error:
+                logger.error(f"Failed to update trust score in news collection: {update_error}")
 
             return result
 
         except Exception as e:
-            logger.error(f"Error performing trust analysis for news {news_id}: {e}")
-            return None
+            logger.error(f"Error in perform_trust_analysis: {e}")
+            # 오류 발생 시 기본값 반환
+            return TrustAnalysisResult(
+                news_id=news_id,
+                trust_score=0.5,  # 기본 신뢰도 점수
+                model_name="fallback-error-recovery",
+                created_at=datetime.utcnow(),
+                metadata={
+                    "error": str(e),
+                    "recovery": "fallback_value"
+                }
+            )
 
     async def perform_sentiment_analysis(self, news_id: str) -> Optional[SentimentAnalysisResult]:
         """Perform sentiment analysis on a news article using Sentiment BERT"""

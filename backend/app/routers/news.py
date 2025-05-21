@@ -266,6 +266,17 @@ async def get_news_detail(
         if "_id" in news and isinstance(news["_id"], ObjectId):
             news["_id"] = str(news["_id"])
 
+        # 이미지 URL 처리
+        if "image_url" in news and news["image_url"]:
+            # 상대 경로인 경우 처리
+            if news["image_url"].startswith("/") or not (news["image_url"].startswith("http://") or news["image_url"].startswith("https://")):
+                # 기본 이미지 URL로 대체
+                news["image_url"] = "https://via.placeholder.com/800x400?text=News+Image"
+
+        # 이미지 URL이 없으면 기본 이미지 설정
+        if "image_url" not in news or not news["image_url"]:
+            news["image_url"] = "https://via.placeholder.com/800x400?text=News+Image"
+
         return news
     except Exception as e:
         logger.error(f"뉴스 상세 정보 가져오기 오류: {str(e)}")
@@ -285,7 +296,14 @@ async def get_comments(
     try:
         # 뉴스 존재 확인
         news_collection = db["news"]
-        news = await news_collection.find_one({"_id": ObjectId(news_id)})
+        # ObjectId로 변환 시도
+        try:
+            news_id_obj = ObjectId(news_id)
+            news = await news_collection.find_one({"_id": news_id_obj})
+        except:
+            # 실패하면 문자열 ID로 시도
+            news = await news_collection.find_one({"_id": news_id})
+
         if not news:
             raise HTTPException(status_code=404, detail="News not found")
 
@@ -354,7 +372,14 @@ async def create_comment(
     try:
         # 뉴스 존재 확인
         news_collection = db["news"]
-        news = await news_collection.find_one({"_id": ObjectId(news_id)})
+        # ObjectId로 변환 시도
+        try:
+            news_id_obj = ObjectId(news_id)
+            news = await news_collection.find_one({"_id": news_id_obj})
+        except:
+            # 실패하면 문자열 ID로 시도
+            news = await news_collection.find_one({"_id": news_id})
+
         if not news:
             raise HTTPException(status_code=404, detail="News not found")
 
@@ -498,7 +523,14 @@ async def like_news(
     try:
         # 뉴스 존재 확인
         news_collection = db["news"]
-        news = await news_collection.find_one({"_id": ObjectId(news_id)})
+        # ObjectId로 변환 시도
+        try:
+            news_id_obj = ObjectId(news_id)
+            news = await news_collection.find_one({"_id": news_id_obj})
+        except:
+            # 실패하면 문자열 ID로 시도
+            news = await news_collection.find_one({"_id": news_id})
+
         if not news:
             raise HTTPException(status_code=404, detail="News not found")
 
@@ -562,7 +594,14 @@ async def bookmark_news(
     try:
         # 뉴스 존재 확인
         news_collection = db["news"]
-        news = await news_collection.find_one({"_id": ObjectId(news_id)})
+        # ObjectId로 변환 시도
+        try:
+            news_id_obj = ObjectId(news_id)
+            news = await news_collection.find_one({"_id": news_id_obj})
+        except:
+            # 실패하면 문자열 ID로 시도
+            news = await news_collection.find_one({"_id": news_id})
+
         if not news:
             raise HTTPException(status_code=404, detail="News not found")
 
@@ -624,7 +663,14 @@ async def get_news_stats(
     try:
         # 뉴스 존재 확인
         news_collection = db["news"]
-        news = await news_collection.find_one({"_id": ObjectId(news_id)})
+        # ObjectId로 변환 시도
+        try:
+            news_id_obj = ObjectId(news_id)
+            news = await news_collection.find_one({"_id": news_id_obj})
+        except:
+            # 실패하면 문자열 ID로 시도
+            news = await news_collection.find_one({"_id": news_id})
+
         if not news:
             raise HTTPException(status_code=404, detail="News not found")
 
@@ -673,3 +719,119 @@ async def get_news_stats(
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error getting news stats: {str(e)}")
+
+@router.post("/{news_id}/key-phrases")
+async def extract_key_phrases(
+    news_id: str,
+    limit: int = Query(10, ge=1, le=50),
+    db = Depends(get_mongodb_database),
+    langchain_service = Depends(get_langchain_service_dep)
+):
+    """
+    뉴스에서 키워드를 추출합니다.
+    """
+    try:
+        # 뉴스 존재 확인
+        news_collection = db["news"]
+
+        # ObjectId로 변환 시도
+        try:
+            news_id_obj = ObjectId(news_id)
+            news = await news_collection.find_one({"_id": news_id_obj})
+        except:
+            # 실패하면 문자열 ID로 시도
+            news = await news_collection.find_one({"_id": news_id})
+
+        if not news:
+            raise HTTPException(status_code=404, detail="News not found")
+
+        # 이미 키워드가 있으면 반환
+        if "keywords" in news and news["keywords"] and len(news["keywords"]) > 0:
+            return {
+                "news_id": str(news["_id"]),
+                "key_phrases": news["keywords"][:limit]
+            }
+
+        # 텍스트 준비
+        title = news.get("title", "")
+        content = news.get("content", "")
+
+        # LangChain 서비스로 키워드 추출
+        analysis_result = await langchain_service.analyze_news(title, content)
+
+        # 추출된 키워드
+        keywords = analysis_result.get("keywords", [])
+
+        # 키워드 저장
+        if keywords:
+            await news_collection.update_one(
+                {"_id": news["_id"]},
+                {"$set": {"keywords": keywords, "updated_at": datetime.utcnow()}}
+            )
+
+        return {
+            "news_id": str(news["_id"]),
+            "key_phrases": keywords[:limit]
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error extracting key phrases: {str(e)}")
+
+@router.post("/{news_id}/summarize")
+async def summarize_news(
+    news_id: str,
+    max_length: int = Query(200, ge=50, le=500),
+    db = Depends(get_mongodb_database),
+    langchain_service = Depends(get_langchain_service_dep)
+):
+    """
+    뉴스 내용을 요약합니다.
+    """
+    try:
+        # 뉴스 존재 확인
+        news_collection = db["news"]
+
+        # ObjectId로 변환 시도
+        try:
+            news_id_obj = ObjectId(news_id)
+            news = await news_collection.find_one({"_id": news_id_obj})
+        except:
+            # 실패하면 문자열 ID로 시도
+            news = await news_collection.find_one({"_id": news_id})
+
+        if not news:
+            raise HTTPException(status_code=404, detail="News not found")
+
+        # 이미 요약이 있고 길이가 적절하면 반환
+        if "summary" in news and news["summary"] and len(news["summary"]) <= max_length:
+            return {
+                "news_id": str(news["_id"]),
+                "summary": news["summary"]
+            }
+
+        # 텍스트 준비
+        title = news.get("title", "")
+        content = news.get("content", "")
+
+        # LangChain 서비스로 요약 생성
+        analysis_result = await langchain_service.analyze_news(title, content)
+
+        # 생성된 요약
+        summary = analysis_result.get("summary", "")
+
+        # 길이 제한
+        if len(summary) > max_length:
+            summary = summary[:max_length] + "..."
+
+        # 요약 저장
+        if summary:
+            await news_collection.update_one(
+                {"_id": news["_id"]},
+                {"$set": {"summary": summary, "updated_at": datetime.utcnow()}}
+            )
+
+        return {
+            "news_id": str(news["_id"]),
+            "summary": summary
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error summarizing news: {str(e)}")

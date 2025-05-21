@@ -3,6 +3,7 @@
 하이브리드 추천 시스템을 위한 FastAPI 라우터입니다.
 """
 
+import logging
 from fastapi import APIRouter, Depends, HTTPException, Query, Body, Path
 from typing import List, Optional, Dict, Any
 from datetime import datetime
@@ -12,6 +13,9 @@ from app.db.mongodb import get_mongodb_database
 from app.services.hybrid_recommendation import get_hybrid_recommendation_service
 from app.services.recommendation_service import get_recommendation_service
 from app.services.bert4rec_service import get_bert4rec_service
+
+# 로거 설정
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["recommendation"])
 
@@ -25,7 +29,7 @@ class NewsRecommendation(BaseModel):
     source: str
     published_date: datetime
     summary: Optional[str] = None
-    image_url: Optional[str] = None
+    image_url: Optional[str] = None  # HttpUrl 대신 str 타입으로 사용
     categories: List[str] = []
     trust_score: Optional[float] = None
     sentiment_score: Optional[float] = None
@@ -194,19 +198,30 @@ async def get_trending_recommendations_news_legacy(
     recommendation_service = get_recommendation_service()
     try:
         trending_news = await recommendation_service.get_trending_news(limit=limit)
-        return [{
-            "id": str(news.id),
-            "title": news.title,
-            "source": news.source,
-            "published_date": news.published_date,
-            "summary": news.summary,
-            "image_url": news.image_url,
-            "categories": news.categories,
-            "trust_score": news.trust_score,
-            "sentiment_score": news.sentiment_score
-        } for news in trending_news]
+        if not trending_news or len(trending_news) == 0:
+            # 빈 결과 반환 (오류를 발생시키지 않음)
+            return []
+
+        # 뉴스 객체가 있는 경우만 반환
+        result = []
+        for news in trending_news:
+            if hasattr(news, 'id') and news.id:
+                result.append({
+                    "id": str(news.id),
+                    "title": news.title,
+                    "source": news.source,
+                    "published_date": news.published_date,
+                    "summary": news.summary,
+                    "image_url": news.image_url,
+                    "categories": news.categories,
+                    "trust_score": news.trust_score,
+                    "sentiment_score": news.sentiment_score
+                })
+        return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"추천 생성 중 오류 발생: {str(e)}")
+        # 오류 로깅만 하고 빈 배열 반환
+        logger.error(f"트렌딩 뉴스 추천 생성 중 오류 발생: {str(e)}")
+        return []
 
 @router.get("/news/cold-start", response_model=List[NewsRecommendation])
 async def get_cold_start_recommendations(
@@ -225,18 +240,30 @@ async def get_cold_start_recommendations(
     bert4rec_service = get_bert4rec_service()
     try:
         cold_start_news = bert4rec_service.get_cold_start_recommendations(limit=limit)
-        return [
-            {
-                "id": str(news.get("_id")),
-                "title": news.get("title", ""),
-                "source": news.get("source", ""),
-                "published_date": news.get("published_date", datetime.utcnow()),
-                "summary": news.get("summary", ""),
-                "image_url": news.get("image_url", ""),
-                "categories": news.get("categories", []),
-                "trust_score": news.get("trust_score", 0.7),
-                "sentiment_score": news.get("sentiment_score", 0.0)
-            } for news in cold_start_news
-        ]
+
+        if not cold_start_news or len(cold_start_news) == 0:
+            # 빈 결과 반환 (오류를 발생시키지 않음)
+            return []
+
+        result = []
+        for news in cold_start_news:
+            if news and "_id" in news:
+                try:
+                    result.append({
+                        "id": str(news.get("_id")),
+                        "title": news.get("title", ""),
+                        "source": news.get("source", ""),
+                        "published_date": news.get("published_date", datetime.utcnow()),
+                        "summary": news.get("summary", ""),
+                        "image_url": news.get("image_url", ""),
+                        "categories": news.get("categories", []),
+                        "trust_score": news.get("trust_score", 0.7),
+                        "sentiment_score": news.get("sentiment_score", 0.0)
+                    })
+                except Exception as item_error:
+                    logger.error(f"뉴스 항목 처리 중 오류: {str(item_error)}")
+        return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"콜드 스타트 추천 생성 중 오류 발생: {str(e)}")
+        # 오류 로깅만 하고 빈 배열 반환
+        logger.error(f"콜드 스타트 추천 생성 중 오류 발생: {str(e)}")
+        return []

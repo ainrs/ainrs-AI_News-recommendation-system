@@ -11,7 +11,7 @@ class NewsBase(BaseModel):
     source: str
     published_date: datetime
     author: Optional[str] = None
-    image_url: Optional[HttpUrl] = None
+    image_url: Optional[str] = None  # HttpUrl에서 str로 변경하여 직렬화 문제 해결
     summary: Optional[str] = None
     categories: List[str] = Field(default_factory=list)
     keywords: List[str] = Field(default_factory=list)
@@ -56,7 +56,7 @@ class NewsSummary(BaseModel):
     source: str
     published_date: datetime
     summary: Optional[str] = None
-    image_url: Optional[HttpUrl] = None
+    image_url: Optional[str] = None  # HttpUrl에서 str로 변경하여 직렬화 문제 해결
     trust_score: Optional[float] = None
     sentiment_score: Optional[float] = None
     similarity_score: Optional[float] = None

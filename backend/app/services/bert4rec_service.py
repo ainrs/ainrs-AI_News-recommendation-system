@@ -75,28 +75,45 @@ class BERT4RecService:
             recent_date = datetime.utcnow() - timedelta(days=3)
 
             # 1. 최근 인기 뉴스 (조회수 기준)
-            popular_news = list(news_collection.find(
-                {"published_date": {"$gte": recent_date}},
-                {"_id": 1, "title": 1, "summary": 1, "content": 1, "categories": 1, "view_count": 1}
-            ).sort("view_count", -1).limit(limit * 2))
+            try:
+                popular_news = list(news_collection.find(
+                    {"published_date": {"$gte": recent_date}},
+                    {"_id": 1, "title": 1, "summary": 1, "source": 1, "image_url": 1, "content": 1,
+                     "categories": 1, "view_count": 1, "published_date": 1, "trust_score": 1, "sentiment_score": 1}
+                ).sort("view_count", -1).limit(limit * 2))
+            except Exception as e1:
+                logger.error(f"인기 뉴스 가져오기 오류: {e1}")
+                popular_news = []
 
             # 2. 최신 뉴스
-            latest_news = list(news_collection.find(
-                {},
-                {"_id": 1, "title": 1, "summary": 1, "content": 1, "categories": 1}
-            ).sort("published_date", -1).limit(limit * 2))
+            try:
+                latest_news = list(news_collection.find(
+                    {},
+                    {"_id": 1, "title": 1, "summary": 1, "source": 1, "image_url": 1, "content": 1,
+                     "categories": 1, "published_date": 1, "trust_score": 1, "sentiment_score": 1}
+                ).sort("published_date", -1).limit(limit * 2))
+            except Exception as e2:
+                logger.error(f"최신 뉴스 가져오기 오류: {e2}")
+                latest_news = []
 
             # 3. 다양한 카테고리 뉴스
-            all_categories = self._get_distinct_categories()
             diverse_news = []
+            try:
+                all_categories = self._get_distinct_categories()
 
-            for category in all_categories[:min(5, len(all_categories))]:
-                category_news = list(news_collection.find(
-                    {"categories": {"$in": [category]}},
-                    {"_id": 1, "title": 1, "summary": 1, "content": 1, "categories": 1}
-                ).sort("published_date", -1).limit(2))
-
-                diverse_news.extend(category_news)
+                for category in all_categories[:min(5, len(all_categories))]:
+                    try:
+                        category_news = list(news_collection.find(
+                            {"categories": {"$in": [category]}},
+                            {"_id": 1, "title": 1, "summary": 1, "source": 1, "image_url": 1, "content": 1,
+                             "categories": 1, "published_date": 1, "trust_score": 1, "sentiment_score": 1}
+                        ).sort("published_date", -1).limit(2))
+                        diverse_news.extend(category_news)
+                    except Exception as cat_error:
+                        logger.error(f"카테고리 '{category}' 뉴스 가져오기 오류: {cat_error}")
+                        continue
+            except Exception as e3:
+                logger.error(f"다양한 카테고리 뉴스 가져오기 오류: {e3}")
 
             # 모든 후보 뉴스 합치기
             all_candidates = []
@@ -104,15 +121,40 @@ class BERT4RecService:
             all_candidates.extend(latest_news)
             all_candidates.extend(diverse_news)
 
+            if not all_candidates:
+                logger.warning("콜드 스타트 추천: 후보 뉴스가 없습니다")
+                # 일반 최신 뉴스만 가져오기
+                fallback_news = list(news_collection.find().sort("published_date", -1).limit(limit))
+                if not fallback_news:
+                    logger.error("콜드 스타트 추천: 뉴스가 없습니다")
+                    return []
+                return fallback_news
+
             # 중복 제거
             unique_ids = set()
             unique_recommendations = []
 
             for news in all_candidates:
-                news_id = str(news["_id"])
-                if news_id not in unique_ids:
-                    unique_ids.add(news_id)
-                    unique_recommendations.append(news)
+                try:
+                    news_id = str(news["_id"])
+                    if news_id not in unique_ids:
+                        # 필요한 필드가 모두 있는지 확인
+                        if "title" not in news or not news["title"]:
+                            continue
+
+                        # published_date가 없으면 현재 시간 사용
+                        if "published_date" not in news or not news["published_date"]:
+                            news["published_date"] = datetime.utcnow()
+
+                        # source가 없으면 기본값 사용
+                        if "source" not in news or not news["source"]:
+                            news["source"] = "Unknown Source"
+
+                        unique_ids.add(news_id)
+                        unique_recommendations.append(news)
+                except Exception as item_error:
+                    logger.error(f"뉴스 항목 처리 중 오류: {str(item_error)}")
+                    continue
 
             # 추천 목록 다양성을 위해 순서 섞기
             random.shuffle(unique_recommendations)
@@ -122,8 +164,8 @@ class BERT4RecService:
 
         except Exception as e:
             logger.error(f"❌ 콜드 스타트 추천 생성 오류: {e}")
-            # 오류 발생 시 일부 뉴스라도 반환
-            return list(news_collection.find().sort("published_date", -1).limit(limit))
+            # 오류 발생 시 빈 배열 반환
+            return []
 
     def _get_distinct_categories(self) -> List[str]:
         """

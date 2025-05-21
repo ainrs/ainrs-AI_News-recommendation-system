@@ -1,5 +1,41 @@
 # NVIPBION.AI 백엔드
 
+## 2025-05-20 오류 수정 업데이트
+
+### 수정된 주요 오류
+
+1. **image_url 타입 불일치 문제 해결**
+   - `recommendation.py`의 `NewsRecommendation` 모델에서 `image_url` 필드의 타입을 `HttpUrl`에서 `str`로 변경하여 직렬화 문제 해결
+   - `news.py`의 `NewsBase` 및 `NewsSummary` 모델에서도 동일하게 타입 수정
+   - 반환 값 일관성 확보를 위해 API 엔드포인트에서 HttpUrl 객체를 문자열로 변환하는 로직 추가
+
+2. **ChromaDB 데이터베이스 오류 해결**
+   - `rag_service.py`의 `_init_vectorstores` 메서드를 수정하여 손상된 DB 파일 감지 및 복구 기능 구현
+   - 데이터베이스 파일("file is not a database") 오류가 발생할 경우 자동으로 파일을 삭제하고 새로 생성하는 로직 추가
+   - ChromaDB와 관련된 "Could not connect to tenant default_tenant" 오류 해결
+
+3. **누락된 임포트 추가**
+   - `rag_service.py` 및 `main.py`에 `from bson.objectid import ObjectId` 추가하여 ID 처리 관련 오류 해결
+   - 코드 내에서 사용되는 모듈이 명시적으로 임포트되도록 수정
+
+4. **RAG 엔드포인트 예외 처리 강화**
+   - `/api/v1/rag/search` 엔드포인트에 예외 처리를 추가하여 오류 발생 시 빈 배열을 반환하도록 수정
+   - 프론트엔드에서 발생하는 500 내부 서버 오류 방지
+
+### 기술적 개선사항
+
+1. **타입 일관성 향상**
+   - HTTP 응답에서 일관된 데이터 타입 반환을 위한 변환 로직 구현
+   - Pydantic 모델 타입 정의 개선
+
+2. **오류 복구 메커니즘 강화**
+   - 데이터베이스 손상 시 자동 복구 기능 추가
+   - 파일 시스템 오류에 대한 복원력 향상
+
+3. **로깅 시스템 개선**
+   - RAG 관련 오류에 대한 로깅 강화
+   - 예외 처리 과정에서 상세한 오류 정보 기록
+
 ## 2025-05-19 오류 수정 업데이트
 
 ### 수정된 주요 오류

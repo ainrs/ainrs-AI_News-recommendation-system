@@ -422,31 +422,43 @@ class RecommendationService:
             # Get recent news with high interaction counts
             recent_news = list(news_collection.find().sort("published_date", -1).limit(100))
 
+            if not recent_news or len(recent_news) == 0:
+                logger.warning("트렌딩 뉴스: 최근 기사가 없습니다.")
+                return []
+
             # Calculate trending score (recency + interaction count + trust score)
             trending_news = []
             for news in recent_news:
-                # Count interactions
-                interaction_count = user_interactions_collection.count_documents({
-                    "news_id": news["_id"]
-                })
+                try:
+                    # Count interactions
+                    interaction_count = user_interactions_collection.count_documents({
+                        "news_id": str(news["_id"])
+                    })
 
-                # Calculate days since publication
-                days_old = 0
-                if "published_date" in news:
-                    delta = datetime.utcnow() - news["published_date"]
-                    days_old = delta.days + (delta.seconds / 86400.0)  # Convert seconds to fractional days
+                    # Calculate days since publication
+                    days_old = 0
+                    if "published_date" in news:
+                        delta = datetime.utcnow() - news["published_date"]
+                        days_old = delta.days + (delta.seconds / 86400.0)  # Convert seconds to fractional days
 
-                # Calculate trending score
-                # More recent articles and more interactions = higher score
-                recency_factor = max(0, 7 - days_old) / 7  # 0-1 scale, 0 if older than 7 days
-                trust_factor = news.get("trust_score", 0.5)  # 0-1 scale
+                    # Calculate trending score
+                    # More recent articles and more interactions = higher score
+                    recency_factor = max(0, 7 - days_old) / 7  # 0-1 scale, 0 if older than 7 days
+                    trust_factor = news.get("trust_score", 0.5)  # 0-1 scale
 
-                trending_score = (0.4 * recency_factor) + (0.4 * min(1, interaction_count / 10)) + (0.2 * trust_factor)
+                    trending_score = (0.4 * recency_factor) + (0.4 * min(1, interaction_count / 10)) + (0.2 * trust_factor)
 
-                trending_news.append({
-                    "news": news,
-                    "trending_score": trending_score
-                })
+                    trending_news.append({
+                        "news": news,
+                        "trending_score": trending_score
+                    })
+                except Exception as item_error:
+                    logger.error(f"뉴스 항목 처리 중 오류: {str(item_error)}")
+                    continue
+
+            if not trending_news or len(trending_news) == 0:
+                logger.warning("트렌딩 뉴스: 처리된 기사가 없습니다.")
+                return []
 
             # Sort by trending score and limit results
             trending_news.sort(key=lambda x: x["trending_score"], reverse=True)
@@ -455,19 +467,23 @@ class RecommendationService:
             # Convert to NewsSummary objects
             result = []
             for item in trending_news:
-                news = item["news"]
-                summary = NewsSummary(
-                    id=str(news["_id"]),
-                    title=news["title"],
-                    source=news["source"],
-                    published_date=news["published_date"],
-                    summary=news.get("summary"),
-                    image_url=news.get("image_url"),
-                    trust_score=news.get("trust_score"),
-                    sentiment_score=news.get("sentiment_score"),
-                    categories=news.get("categories", [])
-                )
-                result.append(summary)
+                try:
+                    news = item["news"]
+                    summary = NewsSummary(
+                        id=str(news["_id"]),
+                        title=news["title"],
+                        source=news["source"],
+                        published_date=news["published_date"],
+                        summary=news.get("summary", ""),
+                        image_url=news.get("image_url", ""),
+                        trust_score=news.get("trust_score", 0.5),
+                        sentiment_score=news.get("sentiment_score", 0.0),
+                        categories=news.get("categories", [])
+                    )
+                    result.append(summary)
+                except Exception as convert_error:
+                    logger.error(f"NewsSummary 변환 중 오류: {str(convert_error)}")
+                    continue
 
             return result
 
