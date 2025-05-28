@@ -99,15 +99,34 @@ class BERT4RecService:
             # 3. 다양한 카테고리 뉴스
             diverse_news = []
             try:
+                # 주요 카테고리 명시적 지정 (인공지능, 빅데이터, 클라우드, 스타트업 등)
+                important_categories = ["인공지능", "빅데이터", "클라우드", "스타트업", "IT기업", "로봇", "블록체인", "메타버스", "AI서비스", "칼럼"]
+
+                # 데이터베이스에서 모든 카테고리 가져오기
                 all_categories = self._get_distinct_categories()
 
-                for category in all_categories[:min(5, len(all_categories))]:
+                # 중요 카테고리를 우선 처리하고 나머지 카테고리도 포함
+                priority_categories = []
+                for cat in important_categories:
+                    if cat in all_categories:
+                        priority_categories.append(cat)
+
+                # 남은 카테고리 추가 (중복 제거)
+                for cat in all_categories:
+                    if cat not in priority_categories:
+                        priority_categories.append(cat)
+
+                # 모든 카테고리에서 뉴스 가져오기 (카테고리당 2개씩)
+                for category in priority_categories[:min(10, len(priority_categories))]:
                     try:
                         category_news = list(news_collection.find(
                             {"categories": {"$in": [category]}},
                             {"_id": 1, "title": 1, "summary": 1, "source": 1, "image_url": 1, "content": 1,
                              "categories": 1, "published_date": 1, "trust_score": 1, "sentiment_score": 1}
-                        ).sort("published_date", -1).limit(2))
+                        ).sort("published_date", -1).limit(3))  # 카테고리당 3개로 증가
+
+                        # 로그 추가
+                        logger.info(f"카테고리 '{category}'에서 {len(category_news)}개 뉴스 가져옴")
                         diverse_news.extend(category_news)
                     except Exception as cat_error:
                         logger.error(f"카테고리 '{category}' 뉴스 가져오기 오류: {cat_error}")
@@ -156,11 +175,66 @@ class BERT4RecService:
                     logger.error(f"뉴스 항목 처리 중 오류: {str(item_error)}")
                     continue
 
-            # 추천 목록 다양성을 위해 순서 섞기
-            random.shuffle(unique_recommendations)
+            # 카테고리별로 뉴스 그룹화하여 다양성 보장
+            category_groups = {}
+            for news in unique_recommendations:
+                news_categories = news.get("categories", [])
+                if not news_categories:
+                    news_categories = ["미분류"]
+
+                # 뉴스의 첫 번째 카테고리를 기준으로 그룹화
+                primary_category = news_categories[0]
+                if primary_category not in category_groups:
+                    category_groups[primary_category] = []
+                category_groups[primary_category].append(news)
+
+            # 균형있는 추천 결과 생성
+            balanced_recommendations = []
+            remaining_slots = limit
+
+            # 모든 카테고리에서 최소 1개씩 선택
+            important_categories = ["인공지능", "빅데이터", "클라우드", "스타트업", "IT기업", "로봇", "블록체인", "메타버스", "AI서비스", "칼럼"]
+            for category in important_categories:
+                if category in category_groups and remaining_slots > 0:
+                    # 해당 카테고리에서 최신 뉴스 1개 선택
+                    news_item = category_groups[category][0]
+                    balanced_recommendations.append(news_item)
+                    category_groups[category].remove(news_item)
+                    remaining_slots -= 1
+
+            # 남은 슬롯을 다양한 카테고리로 채우기
+            all_categories = list(category_groups.keys())
+            random.shuffle(all_categories)
+
+            for category in all_categories:
+                if remaining_slots <= 0:
+                    break
+
+                if category_groups[category]:
+                    news_item = category_groups[category][0]
+                    balanced_recommendations.append(news_item)
+                    category_groups[category].remove(news_item)
+                    remaining_slots -= 1
+
+            # 그래도 남은 슬롯이 있으면 남은 뉴스로 채우기
+            if remaining_slots > 0:
+                remaining_news = []
+                for category, news_list in category_groups.items():
+                    remaining_news.extend(news_list)
+
+                random.shuffle(remaining_news)
+                balanced_recommendations.extend(remaining_news[:remaining_slots])
+
+            # 로그 추가
+            category_counts = {}
+            for news in balanced_recommendations:
+                cat = news.get("categories", ["미분류"])[0]
+                category_counts[cat] = category_counts.get(cat, 0) + 1
+
+            logger.info(f"추천 결과 카테고리 분포: {category_counts}")
 
             # 요청된 개수만큼 반환
-            return unique_recommendations[:limit]
+            return balanced_recommendations[:limit]
 
         except Exception as e:
             logger.error(f"❌ 콜드 스타트 추천 생성 오류: {e}")
@@ -182,7 +256,7 @@ class BERT4RecService:
             return [doc.get("category") for doc in categories if doc.get("category")]
         except Exception as e:
             logger.error(f"❌ 카테고리 가져오기 오류: {e}")
-            return ["인공지능", "기술", "비즈니스", "과학"]  # 기본 카테고리
+            return ["인공지능", "빅데이터", "클라우드", "스타트업", "IT기업", "로봇", "블록체인", "메타버스", "AI서비스", "칼럼"]  # 다양한 기본 카테고리
 
     def get_content_based_recommendations(self, news_id: str, limit: int = 5) -> List[Dict[str, Any]]:
         """
@@ -222,8 +296,8 @@ class BERT4RecService:
                 logger.info("✅ 콜드 스타트 추천 데이터가 이미 존재합니다.")
                 return True
 
-            # 기본 추천 데이터 생성
-            recommendations = self.get_cold_start_recommendations(limit=10)
+            # 기본 추천 데이터 생성 (더 많은 뉴스 포함)
+            recommendations = self.get_cold_start_recommendations(limit=20)  # 20개로 증가
 
             # 추천 ID 목록
             recommendation_ids = [str(rec["_id"]) for rec in recommendations]

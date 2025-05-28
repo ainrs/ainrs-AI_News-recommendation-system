@@ -210,8 +210,9 @@ class LangChainService:
                         # 이벤트 루프가 없는 경우 새 루프 생성
                         new_loop = asyncio.new_event_loop()
                         asyncio.set_event_loop(new_loop)
-                        coro = sentiment_service.analyze_sentiment(sentiment_text)
-                        sentiment_result = new_loop.run_until_complete(coro)
+                        sentiment_result = new_loop.run_until_complete(
+                            sentiment_service.analyze_sentiment(sentiment_text)
+                        )
                         new_loop.close()
 
                     # 감정 분석 결과가 없는 경우 백업 사용

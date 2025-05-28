@@ -314,6 +314,20 @@ async def crawl_news(background_tasks: BackgroundTasks):
     background_tasks.add_task(run_crawler)
     return {"message": "News crawling started in background"}
 
+@app.post("/api/v1/force-update")
+async def force_update(background_tasks: BackgroundTasks):
+    """Force update all news articles"""
+    from app.services.rss_crawler import force_update_all_articles
+    background_tasks.add_task(force_update_all_articles)
+    return {"message": "Force update of all news started in background"}
+
+@app.post("/api/v1/force-update-failed")
+async def force_update_failed(background_tasks: BackgroundTasks):
+    """Force update failed news articles"""
+    from app.services.rss_crawler import force_update_failed_articles
+    background_tasks.add_task(force_update_failed_articles)
+    return {"message": "Force update of failed news started in background"}
+
 
 @app.get("/api/v1/news", response_model=List[NewsResponse])
 async def get_news(
@@ -327,14 +341,35 @@ async def get_news(
     logger.info(f"뉴스 목록 요청: limit={limit}, category={category}, source={source}")
 
     try:
+        # 기본 쿼리 - 모든 뉴스를 대상으로 함 (보강된 데이터도 포함)
         query = {}
         if source:
             query["source"] = source
 
-        # 카테고리 필터링 로직 수정 - 카테고리 배열에 포함된 항목 검색
+        # 카테고리 필터링 로직 개선
         if category:
-            query["categories"] = {"$in": [category]}  # 배열 내에 카테고리가 포함된 항목 검색
-            logger.info(f"카테고리 필터링: {category}, 쿼리: {query}")
+            # 카테고리 이름 매핑 확장
+            category_mapping = {
+                "인공지능": ["인공지능", "AI", "머신러닝", "딥러닝", "artificial intelligence", "machine learning", "deep learning"],
+                "클라우드": ["클라우드", "cloud", "AWS", "Azure", "GCP", "클라우드컴퓨팅"],
+                "빅데이터": ["빅데이터", "big data", "데이터", "data", "빅데이터분석", "데이터분석"],
+                "스타트업": ["스타트업", "startup", "벤처", "venture", "창업"],
+                "IT": ["IT", "기술", "테크", "technology", "정보기술"]
+            }
+
+            search_categories = category_mapping.get(category, [category])
+            # 정확한 매칭과 부분 매칭을 모두 고려
+            category_conditions = []
+            for cat in search_categories:
+                category_conditions.extend([
+                    {"categories": {"$in": [cat]}},
+                    {"categories": {"$regex": cat, "$options": "i"}},
+                    {"title": {"$regex": cat, "$options": "i"}},
+                    {"content": {"$regex": cat, "$options": "i"}}
+                ])
+
+            query["$or"] = category_conditions
+            logger.info(f"🔍 카테고리 필터링: {category} -> {search_categories}")
 
         # 데이터베이스 상태 확인
         total_news_count = news_collection.count_documents({})
@@ -344,13 +379,30 @@ async def get_news(
         filtered_count = news_collection.count_documents(query)
         logger.info(f"필터링된 뉴스 수: {filtered_count}개")
 
-        # 뉴스 가져오기 - 최신순으로 정렬
-        news = list(news_collection.find(query).skip(skip).limit(limit).sort("published_date", -1))
+        # 뉴스 가져오기 - 최신순으로 정렬하되 보강된 데이터 우선
+        sort_criteria = [
+            ("trust_score", -1),  # 신뢰도 점수 높은 순
+            ("published_date", -1)  # 최신순
+        ]
+
+        news = list(news_collection.find(query).skip(skip).limit(limit).sort(sort_criteria))
         logger.info(f"뉴스 쿼리 결과: {len(news)}개 항목")
+
+        # DB 데이터 샘플 로깅
+        if news:
+            sample = news[0]
+            logger.info(f"샘플 뉴스 카테고리: {sample.get('categories', 'None')}")
+            logger.info(f"샘플 뉴스 is_basic_info: {sample.get('is_basic_info', 'None')}")
+            logger.info(f"샘플 뉴스 trust_score: {sample.get('trust_score', 'None')}")
 
         # 결과가 없는 경우
         if not news:
             logger.warning(f"일치하는 뉴스가 없습니다. 쿼리: {query}")
+            # 카테고리 필터링에서 결과가 없으면 기본 뉴스 반환
+            if category:
+                logger.info(f"카테고리 '{category}' 뉴스가 없어 일반 뉴스로 대체합니다.")
+                news = list(news_collection.find({}).skip(skip).limit(limit).sort("published_date", -1))
+
             # 뉴스 데이터가 없으면 크롤러 실행
             if total_news_count == 0:
                 logger.info("뉴스 데이터가 없습니다. 크롤러를 자동으로 실행합니다.")
@@ -363,7 +415,27 @@ async def get_news(
                 item["image_url"] = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAZAAAADICAMAAAD2ShmzAAAAM1BMVEX////CwsL5+fnV1dXq6ur19fXg4OC8vLzT09Pt7e3Hx8fv7+/d3d3h4eHQ0NCwsLD///+ck8V3AAAACXBIWXMAAAsTAAALEwEAmpwYAAAD90lEQVR4nO3di5KjIBCFYQREvEDf/2UX0E2ceGlAiQy6/1fTtZVJ1SQndjtBr7IcZ7TqfnAZHhODu1cP/92V0tpqEz6BePgzcb/+Qb01hSK9VQeQKU6e0iJ6VXpRfFcfoAlbRZoiCCKEAEIIIIQAQggghABCCCCEAEIIBYUwU0kGsZoG8k4yiNPf1f9bvWQQ70zpSnnBILZcnhTLBbGutBDLfXbFBmF/CJQMwiXtsiDcrLJXJYNYZkpCsQghgBACCCGAEAIIIYAQQgEhk9UVMGhMMVQ3qGsZbZ+HGqY53jJp90Nouo2HUL2O/6pqpjmGQx6R9PlbY8+GUJ0+GTTHJdIhVGfOhFCdP7OT6qYTi6NvRULcR3UkBnVbXOUexFd2LkTVdjnRV3ZqIGbLXnp2Jb5T8dwcPrM5F8It/Ft48yrR3HbVHQ+hvlqfFwihL5cA4SCr1J0B8UWnPTKhvtfAu9ZQCB2sU85rCcyH0Nl65GQIXaj+T4doCtL4jAL3hWzpkahZXLsxO2tRFoIyIKV6ZDaEZmwDQlUHQVyhQkNo3g4gtPCDNkdVIJdDXJt0Y5xXcmMOyjXIpZNIGj3mZQgVPd4IQttaCqG1zfI1EFoNGc6HUNnD8URIYJ8QYzAiFMStzZGlENrYvhLSl2t20qUQYm1hq+wVh0Jo4UgIre6PQ6jocYi+XGXXJZdBaN2i4iFUdkVSPy7axrIglHdZXz/OwpW3UrMg3aYP+6HdTjdX8g/SPU6hgx32P4imbKF0z0txA+bZ0e3FNuX3LtfucWhbkofVU+DhXPe4FN4vQcfz2e4JH1DQ5zt8KftFuSDgk6Ou/AxoG/HZ7Mu1ouD5N2f/rLYxe1DGCDxj6ux7yjdC5P1S4Dlt5y2TvTIQRzV7XuDZiVcfUCJ4q8qXy2EJ3yrK5aA7e6/MhfAfQxcAoYc4UWflw0BFNKcdJPjZJQgBhBBACAGEEEAIAYQQQAgBhBBACAGEEEAIAYQQQAgBhBBACAGEEEAIAYQQQAgBhBBACAGEEEAIAYQQQAgBhBAWA8K9MlwI9ynhXqQsCOcXEWw3JQvCPRdcFMkgzEfJZZEMwv1g+EqJZBDuUcN+jgWDcL8h7rkkGYR7V3FPMO5lxEUSCXGPRuoNx0USCfd65d6zDIj+Moj+Moj+Moj+Moj+Moj++vMQ8tRCf/1lEP31l0H0FzV7YV9sMQ1Wf1Gz4QDC3XaYF1tUfGISrT91EUQI/WUQ/WUQ/WUQ/WUQ/UXNIJjfGYR5xUa0+NQZ1g8lzSCkGQT7uZ14Nd8QJt5fJIjDiqIAAAAASUVORK5CYII="
 
             if "categories" not in item or not item.get("categories"):
-                item["categories"] = ["인공지능"]
+                # 제목과 내용 기반으로 카테고리 자동 할당
+                title_content = (item.get("title", "") + " " + item.get("content", "")).lower()
+                detected_categories = []
+
+                # 카테고리 키워드 매핑
+                category_keywords = {
+                    "인공지능": ["ai", "인공지능", "머신러닝", "딥러닝", "machine learning", "artificial intelligence", "신경망", "chatgpt", "gpt"],
+                    "빅데이터": ["빅데이터", "big data", "데이터", "data", "분석", "analytics", "데이터베이스"],
+                    "클라우드": ["클라우드", "cloud", "aws", "azure", "gcp", "서버", "인프라"],
+                    "스타트업": ["스타트업", "startup", "벤처", "창업", "투자", "펀딩"]
+                }
+
+                for category, keywords in category_keywords.items():
+                    if any(keyword in title_content for keyword in keywords):
+                        detected_categories.append(category)
+
+                # 카테고리가 감지되지 않으면 기본값 설정
+                if not detected_categories:
+                    detected_categories = ["IT"]
+
+                item["categories"] = detected_categories
 
             if "summary" not in item or not item.get("summary"):
                 item["summary"] = item.get("title", "")[:100]
@@ -456,7 +528,7 @@ async def get_trending_news(
     limit: int = 10,
     recommendation_service: Any = Depends(get_recommendation_service_dep)
 ):
-    """Get trending news articles"""
+    """Get trending news articles based on user interactions"""
     logger.info(f"트렌딩 뉴스 요청: limit={limit}")
     try:
         # 기본 뉴스라도 있는지 확인
@@ -465,12 +537,127 @@ async def get_trending_news(
             logger.warning("뉴스 데이터가 없습니다. 빈 목록 반환")
             return []
 
+        # 사용자 상호작용 기반 인기뉴스 계산
+        try:
+            # 뉴스별 상호작용 점수 계산하는 aggregation pipeline
+            interaction_pipeline = [
+                {
+                    "$addFields": {
+                        "news_id_str": {"$toString": "$_id"}
+                    }
+                },
+                {
+                    "$lookup": {
+                        "from": "user_interactions",
+                        "let": {"news_id": "$_id", "news_id_str": "$news_id_str"},
+                        "pipeline": [
+                            {
+                                "$match": {
+                                    "$expr": {
+                                        "$or": [
+                                            {"$eq": ["$news_id", "$news_id"]},
+                                            {"$eq": ["$news_id", "$news_id_str"]}
+                                        ]
+                                    }
+                                }
+                            }
+                        ],
+                        "as": "interactions"
+                    }
+                },
+                {
+                    "$addFields": {
+                        # 상호작용 점수 계산 (view=1, click=2, like=3, share=4)
+                        "interaction_score": {
+                            "$sum": {
+                                "$map": {
+                                    "input": "$interactions",
+                                    "as": "interaction",
+                                    "in": {
+                                        "$switch": {
+                                            "branches": [
+                                                {"case": {"$eq": ["$interaction.type", "view"]}, "then": 1},
+                                                {"case": {"$eq": ["$interaction.type", "click"]}, "then": 2},
+                                                {"case": {"$eq": ["$interaction.type", "like"]}, "then": 3},
+                                                {"case": {"$eq": ["$interaction.type", "share"]}, "then": 4}
+                                            ],
+                                            "default": 1
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        "view_count": {
+                            "$size": {
+                                "$filter": {
+                                    "input": "$interactions",
+                                    "cond": {"$eq": ["$this.type", "view"]}
+                                }
+                            }
+                        }
+                    }
+                },
+                {
+                    "$addFields": {
+                        # 최종 트렌딩 점수: 상호작용 점수 + 신뢰도 점수 + 시간 가중치
+                        "trending_score": {
+                            "$add": [
+                                "$interaction_score",
+                                {"$multiply": [{"$ifNull": ["$trust_score", 0.5]}, 10]},
+                                {
+                                    "$multiply": [
+                                        {
+                                            "$divide": [
+                                                {"$subtract": [
+                                                    {"$toLong": "$NOW"},
+                                                    {"$toLong": "$published_date"}
+                                                ]},
+                                                86400000  # 1일을 밀리초로
+                                            ]
+                                        },
+                                        -0.1  # 최신일수록 높은 점수
+                                    ]
+                                }
+                            ]
+                        }
+                    }
+                },
+                {"$sort": {"trending_score": -1}},
+                {"$limit": limit}
+            ]
+
+            trending_news = list(news_collection.aggregate(interaction_pipeline))
+
+            if trending_news:
+                logger.info(f"상호작용 기반 트렌딩 뉴스 계산 완료: {len(trending_news)}개")
+                trending = []
+                for news in trending_news:
+                    summary = NewsSummary(
+                        id=str(news["_id"]),
+                        title=news["title"],
+                        source=news["source"],
+                        published_date=news["published_date"],
+                        summary=news.get("summary", ""),
+                        image_url=news.get("image_url", ""),
+                        trust_score=news.get("trust_score", 0.5),
+                        sentiment_score=news.get("sentiment_score", 0),
+                        categories=news.get("categories", [])
+                    )
+                    trending.append(summary)
+                return trending
+        except Exception as calc_error:
+            logger.error(f"상호작용 기반 트렌딩 계산 실패: {calc_error}")
+
+        # 추천 서비스 사용 시도
         trending = await recommendation_service.get_trending_news(limit)
 
-        # 추천 결과가 없는 경우 최신 뉴스로 대체
+        # 추천 결과가 없는 경우 신뢰도 높은 최신 뉴스로 대체
         if not trending or len(trending) == 0:
-            logger.info("트렌딩 뉴스가 없습니다. 최신 뉴스로 대체합니다.")
-            recent_news = list(news_collection.find().sort("published_date", -1).limit(limit))
+            logger.info("트렌딩 뉴스가 없습니다. 신뢰도 높은 최신 뉴스로 대체합니다.")
+            recent_news = list(news_collection.find().sort([
+                ("trust_score", -1),
+                ("published_date", -1)
+            ]).limit(limit))
             trending = []
 
             for news in recent_news:
@@ -1115,7 +1302,8 @@ async def analyze_news_sentiment(
 @app.get("/api/v1/news/cold-start", response_model=List[NewsSummary])
 async def get_cold_start_recommendations(
     limit: int = 5,
-    bert4rec_service = Depends(get_bert4rec_service)
+    bert4rec_service = Depends(get_bert4rec_service),
+    db = Depends(get_mongodb_database)
 ):
     """사용자 데이터가 없는 상태에서 초기 추천을 제공합니다."""
     logger.info(f"콜드 스타트 추천 요청: limit={limit}")
@@ -1125,30 +1313,47 @@ async def get_cold_start_recommendations(
 
         if not recommendations or len(recommendations) == 0:
             logger.warning("콜드 스타트 추천이 없습니다. 최신 뉴스로 대체합니다.")
-            recent_news = list(news_collection.find().sort("published_date", -1).limit(limit))
+            news_collection = db["news"]
+            recent_news = await news_collection.find().sort("published_date", -1).limit(limit).to_list(length=limit)
+
+            if not recent_news:
+                logger.warning("데이터베이스에 뉴스가 없습니다.")
+                return []
+
             recommendations = recent_news
 
         # 응답 포맷팅
         result = []
         for news in recommendations:
-            summary = NewsSummary(
-                id=str(news["_id"]),
-                title=news["title"],
-                source=news.get("source", "Unknown"),
-                published_date=news.get("published_date", datetime.utcnow()),
-                summary=news.get("summary", ""),
-                image_url=news.get("image_url", ""),
-                trust_score=news.get("trust_score", 0.5),
-                sentiment_score=news.get("sentiment_score", 0),
-                categories=news.get("categories", [])
-            )
-            result.append(summary)
+            try:
+                # 필수 필드 확인
+                if not news.get("_id") or not news.get("title"):
+                    logger.warning(f"필수 필드가 없는 뉴스 건너뜀: {news}")
+                    continue
+
+                summary = NewsSummary(
+                    id=str(news["_id"]),
+                    title=news["title"],
+                    source=news.get("source", "Unknown"),
+                    published_date=news.get("published_date", datetime.utcnow()),
+                    summary=news.get("summary", ""),
+                    image_url=news.get("image_url", ""),
+                    trust_score=news.get("trust_score", 0.5),
+                    sentiment_score=news.get("sentiment_score", 0),
+                    categories=news.get("categories", [])
+                )
+                result.append(summary)
+            except Exception as item_error:
+                logger.error(f"뉴스 항목 처리 중 오류: {item_error}")
+                continue
 
         logger.info(f"콜드 스타트 추천 응답: {len(result)}개 항목")
         return result
     except Exception as e:
         logger.error(f"콜드 스타트 추천 처리 중 오류: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error getting news: {str(e)}")
+        # 500 에러 대신 빈 배열 반환
+        logger.warning("콜드 스타트 추천 실패로 빈 배열 반환")
+        return []
 
 @app.post("/api/v1/text/embeddings")
 async def generate_text_embeddings(

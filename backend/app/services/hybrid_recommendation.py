@@ -103,7 +103,7 @@ class HybridRecommendationService:
 
                 # 뉴스 상세 정보 가져오기
                 for news_id in recommended_ids:
-                    news = news_collection.find_one({"_id": news_id})
+                    news = news_collection.find_one({"_id": news_id, "is_basic_info": False})
                     if news:
                         recommended_news.append(news)
 
@@ -132,7 +132,7 @@ class HybridRecommendationService:
                 # 각 최근 뉴스마다 유사한 뉴스 찾기
                 content_news_ids = set()
                 for news_id in recent_news_ids:
-                    news = news_collection.find_one({"_id": news_id})
+                    news = news_collection.find_one({"_id": news_id, "is_basic_info": False})
                     if news:
                         # 임베딩 기반 유사 뉴스 검색
                         query = f"{news.get('title', '')} {news.get('summary', '')}"
@@ -160,14 +160,15 @@ class HybridRecommendationService:
                 read_history = []
                 for interaction in recent_interactions:
                     news_id = interaction.get("news_id")
-                    news = news_collection.find_one({"_id": news_id})
+                    news = news_collection.find_one({"_id": news_id, "is_basic_info": False})
                     if news:
                         read_history.append(news.get("title", ""))
 
                 # 최신 뉴스 중 아직 추천되지 않은 뉴스 필터링
                 excluded_ids = set(cf_news_ids) | content_news_ids
                 recent_news_cursor = news_collection.find({
-                    "_id": {"$nin": list(excluded_ids)}
+                    "_id": {"$nin": list(excluded_ids)},
+                    "is_basic_info": False  # HTML 파싱 완료된 뉴스만 사용
                 }).sort("published_date", -1).limit(limit)
 
                 recent_news_list = list(recent_news_cursor)
@@ -237,7 +238,7 @@ class HybridRecommendationService:
                                 # 원본 뉴스 찾기
                                 llm_news_list = []
                                 for news_id in diverse_ids:
-                                    news = news_collection.find_one({"_id": news_id})
+                                    news = news_collection.find_one({"_id": news_id, "is_basic_info": False})
                                     if news:
                                         llm_news_list.append(news)
                     else:
@@ -250,13 +251,13 @@ class HybridRecommendationService:
                 # 최종 추천 목록 통합
                 # 1. 협업 필터링 결과
                 for news_id in cf_news_ids:
-                    news = news_collection.find_one({"_id": news_id})
+                    news = news_collection.find_one({"_id": news_id, "is_basic_info": False})
                     if news:
                         recommended_news.append(news)
 
                 # 2. 콘텐츠 기반 필터링 결과
                 for news_id in content_news_ids:
-                    news = news_collection.find_one({"_id": news_id})
+                    news = news_collection.find_one({"_id": news_id, "is_basic_info": False})
                     if news:
                         recommended_news.append(news)
 

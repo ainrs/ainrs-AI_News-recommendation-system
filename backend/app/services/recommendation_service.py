@@ -96,8 +96,8 @@ class RecommendationService:
 
     async def process_article_metadata(self, news_id: str) -> Dict[str, Any]:
         """Process and enrich article metadata using LLM chains"""
-        # Get news article
-        news = news_collection.find_one({"_id": news_id})
+        # Get news article (only HTML-parsed ones)
+        news = news_collection.find_one({"_id": news_id, "is_basic_info": False})
         if not news:
             return {"success": False, "error": "Article not found"}
 
@@ -145,8 +145,8 @@ class RecommendationService:
 
     async def analyze_news_langchain(self, news_id: str) -> Dict[str, Any]:
         """LangChain을 사용하여 뉴스 기사를 분석합니다."""
-        # Get news article
-        news = news_collection.find_one({"_id": news_id})
+        # Get news article (only HTML-parsed ones)
+        news = news_collection.find_one({"_id": news_id, "is_basic_info": False})
         if not news:
             return {"success": False, "error": "Article not found"}
 
@@ -246,8 +246,8 @@ class RecommendationService:
             # Convert to NewsSummary objects
             result = []
             for news in filtered_news:
-                # Get full news article to access all fields
-                full_news = news_collection.find_one({"_id": news["id"]})
+                # Get full news article to access all fields (only HTML-parsed ones)
+                full_news = news_collection.find_one({"_id": news["id"], "is_basic_info": False})
                 if full_news:
                     summary = NewsSummary(
                         id=full_news["_id"],
@@ -287,7 +287,7 @@ class RecommendationService:
             similar_news = []
             for result in results:
                 news_id = result["id"]
-                news = news_collection.find_one({"_id": news_id})
+                news = news_collection.find_one({"_id": news_id, "is_basic_info": False})
                 if news:
                     similar_news.append({
                         "id": news["_id"],
@@ -393,8 +393,8 @@ class RecommendationService:
             # Convert to NewsSummary objects
             result = []
             for news in recommendations:
-                # Get full news article to access all fields
-                full_news = news_collection.find_one({"_id": news["id"]})
+                # Get full news article to access all fields (only HTML-parsed ones)
+                full_news = news_collection.find_one({"_id": news["id"], "is_basic_info": False})
                 if full_news:
                     summary = NewsSummary(
                         id=full_news["_id"],
@@ -503,8 +503,8 @@ class RecommendationService:
                     "updated_at": datetime.utcnow()
                 })
 
-            # Check if news exists
-            news = news_collection.find_one({"_id": news_id})
+            # Check if news exists (only HTML-parsed ones)
+            news = news_collection.find_one({"_id": news_id, "is_basic_info": False})
             if not news:
                 return False
 
@@ -543,8 +543,8 @@ class RecommendationService:
             답변 텍스트
         """
         try:
-            # 뉴스 기사 가져오기
-            news = news_collection.find_one({"_id": news_id})
+            # 뉴스 기사 가져오기 (HTML 파싱 완료된 뉴스만)
+            news = news_collection.find_one({"_id": news_id, "is_basic_info": False})
             if not news:
                 return "해당 기사를 찾을 수 없습니다."
 

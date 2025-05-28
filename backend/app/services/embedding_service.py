@@ -363,7 +363,7 @@ class EmbeddingService:
                     "news_id": news_id,
                     "title": news["title"],
                     "source": news["source"],
-                    "published_date": news["published_date"],
+                    "published_date": news["published_date"].isoformat() if hasattr(news["published_date"], 'isoformat') else str(news["published_date"]),
                     "url": news["url"]
                 }
             )

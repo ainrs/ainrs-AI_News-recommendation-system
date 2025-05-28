@@ -155,7 +155,7 @@ async def _ensure_indexes(db: motor.motor_asyncio.AsyncIOMotorDatabase) -> None:
     await db["news"].create_index("source")
     await db["news"].create_index("categories")
     await db["news"].create_index("published_at")
-    await db["news"].create_index([("title", "text"), ("content", "text")])
+    await db["news"].create_index([("title", "text"), ("content", "text")], default_language="none")
 
     # 사용자 컬렉션 인덱스
     await db["users"].create_index("id", unique=True)

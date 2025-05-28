@@ -35,8 +35,9 @@ class RSSCrawler:
     def fetch_rss_feeds(self) -> List[Dict[str, Any]]:
         """Fetch all RSS feeds and extract articles"""
         all_entries = []
+        max_total_articles = 50  # 전체 최대 50개로 제한
 
-        logger.info(f"📡 시작: RSS 피드 {len(self.rss_feeds)}개 수집")
+        logger.info(f"📡 시작: RSS 피드 {len(self.rss_feeds)}개 수집 (최대 {max_total_articles}개 기사)")
 
         for feed_url in self.rss_feeds:
             try:
@@ -55,25 +56,39 @@ class RSSCrawler:
                 source = urlparse(feed_url).netloc.replace('www.', '').replace('feeds.', '')
                 logger.info(f"✅ 피드 소스: {source}, 기사 수: {len(feed.entries)}개")
 
-                # Process entries
+                # Process entries (카테고리당 최대 15개로 제한)
                 entry_count = 0
-                for entry in feed.entries:
+                max_per_feed = 15
+                for entry in feed.entries[:max_per_feed]:
                     try:
                         # 기본 정보만 빠르게 추출하여 저장 (AI 분석 없이)
                         article = self._process_entry_basic(entry, source)
                         if article and not article.get('existing', False):
                             # 기본 정보로 DB에 저장 (빠른 UI 표시용)
                             try:
-                                # _id가 없으면 새로 생성
-                                if '_id' not in article:
+                                # _id가 반드시 존재하도록 확인
+                                if '_id' not in article or article['_id'] is None:
                                     article['_id'] = hashlib.md5(article['url'].encode('utf-8')).hexdigest()
 
-                                logger.info(f"🔄 기본 정보로 기사 저장: {article['title'][:30]}...")
-                                news_collection.insert_one(article)
+                                # id 필드를 명시적으로 설정 (MongoDB에서 _id를 id로 인식하지 않도록)
+                                article['id'] = article['_id']
+
+                                logger.info(f"🆕 신규 기사 저장: {article['title'][:30]}...")
+                                # upsert로 중복 처리
+                                news_collection.update_one(
+                                    {"_id": article['_id']},
+                                    {"$set": article},
+                                    upsert=True
+                                )
 
                                 # 수집된 기사 목록에 추가 (AI 분석은 나중에 사용자가 클릭할 때 수행)
                                 all_entries.append(article)
                                 entry_count += 1
+
+                                # 전체 최대 개수 확인
+                                if len(all_entries) >= max_total_articles:
+                                    logger.info(f"📊 최대 기사 수({max_total_articles}개) 도달, 수집 중단")
+                                    return all_entries
                             except Exception as db_error:
                                 logger.error(f"❌ 기본 기사 DB 저장 오류: {str(db_error)}")
                         elif article and article.get('existing', False):
@@ -114,6 +129,7 @@ class RSSCrawler:
             logger.info(f"📋 기사가 이미 DB에 존재합니다: {url}")
             return {
                 "_id": existing["_id"],
+                "id": existing["_id"],  # id 필드도 명시적으로 추가
                 "url": url,
                 "title": entry.get('title', '').strip(),
                 "source": source,
@@ -187,8 +203,11 @@ class RSSCrawler:
             else:
                 categories = ["인공지능"]  # 기본값은 인공지능으로 설정
 
-        # ID 생성
+        # ID 생성 (URL 해시 값 사용)
         _id = hashlib.md5(url.encode('utf-8')).hexdigest()
+
+        # id 필드도 명시적으로 설정 (MongoDB에서 _id와 id를 동일하게 유지)
+        article_id = _id
 
         # 내용(content) 추출 시도
         content = ""
@@ -216,6 +235,7 @@ class RSSCrawler:
         # 기본 정보만으로 빠르게 기사 객체 생성
         basic_article = {
             "_id": _id,
+            "id": _id,  # id 필드도 명시적으로 추가
             "title": title,
             "url": url,
             "source": source,
@@ -236,6 +256,618 @@ class RSSCrawler:
         logger.info(f"✅ 기본 정보 기사 추출 완료: {title[:30]}...")
         return basic_article
 
+    def enhance_articles_with_full_content(self) -> int:
+        """is_basic_info=True인 기사들의 원본 링크에서 완전한 본문과 이미지 추출"""
+        logger.info("🔧 기사 본문 보강 시작...")
+
+        basic_articles = list(news_collection.find({"is_basic_info": True}))
+        logger.info(f"📋 보강 대상: {len(basic_articles)}개 기사")
+
+        enhanced_count = 0
+        for article in basic_articles:
+            try:
+                url = article.get('url')
+                if not url:
+                    continue
+
+                logger.info(f"🔍 본문 추출: {article.get('title', '')[:30]}...")
+
+                # 원본 기사에서 본문과 이미지 추출
+                content_data = self._extract_article_from_url(url)
+
+                if content_data['content'] and len(content_data['content']) > 50:
+                    # DB 업데이트
+                    update_fields = {
+                        'content': content_data['content'],
+                        'is_basic_info': False,
+                        'updated_at': datetime.utcnow()
+                    }
+
+                    if content_data['image_url']:
+                        update_fields['image_url'] = content_data['image_url']
+
+                    news_collection.update_one(
+                        {'_id': article['_id']},
+                        {'$set': update_fields}
+                    )
+
+                    enhanced_count += 1
+                    logger.info(f"✅ 보강 완료: {article.get('title', '')[:30]}...")
+                else:
+                    logger.warning(f"⚠️ 본문 추출 실패: {article.get('title', '')[:30]}...")
+
+            except Exception as e:
+                logger.error(f"❌ 보강 오류: {str(e)}")
+                continue
+
+        logger.info(f"🎉 보강 완료: {enhanced_count}/{len(basic_articles)}개 처리")
+        return enhanced_count
+
+    def _extract_article_from_url(self, url: str) -> Dict[str, Any]:
+        """URL에서 기사 본문과 이미지 추출"""
+        result = {'content': '', 'image_url': '', 'error': None}
+
+        try:
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+
+            response = requests.get(url, headers=headers, timeout=10)
+            response.raise_for_status()
+            response.encoding = response.apparent_encoding or 'utf-8'
+
+            soup = BeautifulSoup(response.text, 'html.parser')
+
+            # 불필요한 요소 제거
+            for unwanted in soup.find_all(['script', 'style', 'nav', 'header', 'footer', 'aside']):
+                unwanted.extract()
+
+            domain = urlparse(url).netloc.lower()
+            content = ''
+            image_url = ''
+
+            # 한겨레
+            if 'hani.co.kr' in domain:
+                content_elem = soup.select_one('div.text, div.article-text')
+                if content_elem:
+                    content = content_elem.get_text(separator=' ', strip=True)
+
+                # 한겨레 기사 이미지 추출 방법 개선
+                # 1. 먼저 오픈그래프 이미지 확인 (대표 이미지로 가장 적합)
+                og_image = soup.select_one('meta[property="og:image"]')
+                if og_image and og_image.get('content'):
+                    image_url = og_image.get('content')
+                    logger.info(f"한겨레 기사에서 og:image 찾음: {image_url}")
+                else:
+                    # 2. 다음으로 기사 본문 이미지 확인
+                    img_elem = soup.select_one('div.article-body img, div.text img, .image img, figure img')
+
+                    # 3. 오디오 재생 버튼 이미지는 제외
+                    if img_elem and img_elem.get('src') and 'audio_play' not in img_elem.get('src'):
+                        image_url = img_elem['src']
+                        logger.info(f"한겨레 기사에서 본문 이미지 찾음: {image_url}")
+                    else:
+                        # 4. 이미지가 없거나 오디오 버튼인 경우 다른 이미지 탐색
+                        all_images = soup.select('img')
+                        for img in all_images:
+                            src = img.get('src', '')
+                            # 오디오 버튼이나 작은 아이콘 제외
+                            if src and 'audio_play' not in src and '.svg' not in src and (img.get('width', '0') == '0' or int(img.get('width', '0')) > 100):
+                                image_url = src
+                                logger.info(f"한겨레 기사에서 대체 이미지 찾음: {image_url}")
+                                break
+
+            # 조선일보
+            elif 'chosun.com' in domain:
+                content_elem = soup.select_one('div.news_body, #news_body_id')
+                if content_elem:
+                    content = content_elem.get_text(separator=' ', strip=True)
+                img_elem = soup.select_one('.news_body img, .photo img')
+                if img_elem and img_elem.get('src'):
+                    image_url = img_elem['src']
+
+            # 연합뉴스 - 이 부분이 말씀하신 연합뉴스 이미지 추출입니다!
+            elif 'yna.co.kr' in domain:
+                content_elem = soup.select_one('div.story-news-body, .article-body, .story')
+                if content_elem:
+                    content = content_elem.get_text(separator=' ', strip=True)
+                # 연합뉴스 전용 이미지 추출 로직
+                img_selectors = ['.story img', '.article-photo img', '.photo img', '.image img']
+                for selector in img_selectors:
+                    img_elem = soup.select_one(selector)
+                    if img_elem and img_elem.get('src'):
+                        src = img_elem['src']
+                        if 'placeholder' not in src.lower() and 'logo' not in src.lower():
+                            if src.startswith('/'):
+                                parsed = urlparse(url)
+                                src = f"{parsed.scheme}://{parsed.netloc}{src}"
+                            image_url = src
+                            break
+
+            # 일반 사이트
+            if not content:
+                selectors = [
+                    'article', 'div.article-body', 'div.content', 'div.post-content',
+                    'div.entry-content', 'div.story', 'main', '.main-content'
+                ]
+                for selector in selectors:
+                    elem = soup.select_one(selector)
+                    if elem:
+                        text = elem.get_text(separator=' ', strip=True)
+                        if len(text) > 100:
+                            content = text
+                            break
+
+            # 일반 이미지 추출
+            if not image_url:
+                img_selectors = ['article img', 'div.content img', '.main-image img']
+                for selector in img_selectors:
+                    img = soup.select_one(selector)
+                    if img and img.get('src'):
+                        src = img['src']
+                        if 'placeholder' not in src.lower():
+                            if src.startswith('/'):
+                                parsed = urlparse(url)
+                                src = f"{parsed.scheme}://{parsed.netloc}{src}"
+                            image_url = src
+                            break
+
+            # 본문이 짧으면 p 태그들 조합
+            if len(content) < 100:
+                paragraphs = soup.select('p')
+                content = ' '.join([p.get_text(strip=True) for p in paragraphs if len(p.get_text(strip=True)) > 20])
+
+            result['content'] = content
+            result['image_url'] = image_url
+
+            logger.info(f"📄 추출 결과: 본문 {len(content)}자, 이미지 {'있음' if image_url else '없음'}")
+
+        except Exception as e:
+            logger.error(f"❌ 추출 실패 {url}: {str(e)}")
+            result['error'] = str(e)
+
+        return result
+
+    def enhance_all_news_sources(self) -> int:
+        """모든 RSS 언론사 대응 고급 파이프라인"""
+        logger.info("🚀 전체 언론사 대응 파이프라인 시작...")
+
+        # 처리 상태 확인
+        total_articles = news_collection.count_documents({})
+        basic_articles_count = news_collection.count_documents({"is_basic_info": True})
+        completed_articles_count = news_collection.count_documents({"is_basic_info": False})
+
+        logger.info(f"📊 전체 기사: {total_articles}개")
+        logger.info(f"⏳ 보강 대기: {basic_articles_count}개")
+        logger.info(f"✅ 보강 완료: {completed_articles_count}개")
+
+        # 보강 대기 중인 기사들만 가져오기 (한 번에 20개 처리로 증가)
+        basic_articles = list(news_collection.find({"is_basic_info": True}).limit(20))
+        logger.info(f"📋 이번 회차 처리 대상: {len(basic_articles)}개 기사")
+
+        # 보강 대기 기사가 없으면 종료
+        if len(basic_articles) == 0:
+            logger.info("✅ 모든 기사 보강 완료!")
+            return 0
+
+        enhanced_count = 0
+        for article in basic_articles:
+            try:
+                url = article.get('url')
+                if not url:
+                    continue
+
+                categories = article.get('categories', [])
+                category_text = f"[{','.join(categories[:2])}]" if categories else "[카테고리없음]"
+                logger.info(f"🔍 HTML 파싱 {category_text}: {article.get('title', '')[:30]}...")
+
+                # 모든 언론사 대응 추출
+                content_data = self._extract_from_all_sources(url)
+
+                # 기존 뉴스 문서에서 카테고리 정보 가져오기
+                existing_news = news_collection.find_one({'_id': article['_id']})
+                existing_categories = existing_news.get('categories', [])
+
+                # 처리 완료 표시 (카테고리 정보 보존)
+                # 이 부분은 실제로 필요하지 않을 수 있음 - 아래 update_fields로 통합
+                # news_collection.update_one(
+                #     {'_id': article['_id']},
+                #     {'$set': {
+                #         'is_basic_info': False,
+                #         'updated_at': datetime.utcnow(),
+                #         'categories': existing_categories  # 기존 카테고리 보존
+                #     }}
+                # )
+
+                # 내용이 없어도 이미지가 있으면 업데이트 진행
+                update_fields = {
+                    'is_basic_info': False,
+                    'updated_at': datetime.utcnow(),
+                    'categories': existing_categories  # 항상 카테고리 정보 보존
+                }
+
+                # 내용이 있으면 업데이트
+                if content_data['content'] and len(content_data['content']) > 50:
+                    update_fields['content'] = content_data['content']
+
+                # 이미지가 있으면 업데이트
+                if content_data['image_url']:
+                    update_fields['image_url'] = content_data['image_url']
+                    logger.info(f"이미지 URL 저장: {content_data['image_url']}")
+
+                    # AI 요약 결과도 DB에 저장
+                    if content_data.get('ai_enhanced'):
+                        update_fields['ai_enhanced'] = True
+                        if content_data.get('ai_summary'):
+                            update_fields['summary'] = content_data['ai_summary']
+                        if content_data.get('ai_keywords'):
+                            update_fields['keywords'] = content_data['ai_keywords']
+                        if content_data.get('trust_score'):
+                            update_fields['trust_score'] = content_data['trust_score']
+                        if content_data.get('sentiment_score') is not None:
+                            update_fields['sentiment_score'] = content_data['sentiment_score']
+                    else:
+                        update_fields['ai_enhanced'] = False
+
+                    # 카테고리 정보는 이미 update_fields에 설정되어 있으므로 불필요
+                    # if 'categories' not in update_fields and existing_news and 'categories' in existing_news:
+                    #     update_fields['categories'] = existing_news.get('categories', [])
+
+                    # 기사 내용 업데이트 (보강 완료 표시 및 카테고리 보존)
+                    news_collection.update_one(
+                        {'_id': article['_id']},
+                        {'$set': update_fields}
+                    )
+
+                    # DB 저장 후 임베딩 생성 (실패해도 is_basic_info는 False 유지)
+                    # 임시로 임베딩 생성 건너뛰기 - datetime 에러 해결 후 활성화
+                    logger.info(f"⏭️ 임베딩 생성 임시 건너뛰기: {article['_id']}")
+                    # try:
+                    #     from app.services.embedding_service import get_embedding_service
+                    #     embedding_service = get_embedding_service()
+                    #     embedding_result = embedding_service.create_embeddings_for_news(article['_id'])
+                    #     if embedding_result:
+                    #         logger.info(f"✅ 임베딩 생성 완료: {article['_id']}")
+                    #     else:
+                    #         logger.warning(f"⚠️ 임베딩 생성 실패: {article['_id']}")
+                    # except Exception as embed_error:
+                    #     logger.error(f"❌ 임베딩 생성 오류: {str(embed_error)}")
+
+                    enhanced_count += 1
+                    logger.info(f"✅ 전체 언론사 보강 완료: {article.get('title', '')[:30]}...")
+                else:
+                    logger.warning(f"⚠️ 전체 언론사 추출 실패: {article.get('title', '')[:30]}...")
+
+            except Exception as e:
+                logger.error(f"❌ 전체 언론사 파이프라인 오류: {str(e)}")
+                continue
+
+        logger.info(f"🎉 전체 언론사 파이프라인 완료: {enhanced_count}/{len(basic_articles)}개 처리")
+        return enhanced_count
+
+    def _extract_from_all_sources(self, url: str) -> Dict[str, Any]:
+        """모든 언론사 대응 본문과 이미지 추출"""
+        result = {'content': '', 'image_url': '', 'error': None}
+
+        try:
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+
+            response = requests.get(url, headers=headers, timeout=10)
+            response.raise_for_status()
+            response.encoding = response.apparent_encoding or 'utf-8'
+
+            soup = BeautifulSoup(response.text, 'html.parser')
+
+            # 불필요한 요소 제거
+            for unwanted in soup.find_all(['script', 'style', 'nav', 'header', 'footer', 'aside']):
+                unwanted.extract()
+
+            domain = urlparse(url).netloc.lower()
+            content = ''
+            image_url = ''
+
+            # 국내 언론사들
+            if 'hani.co.kr' in domain:  # 한겨레
+                content_elem = soup.select_one('div.text, div.article-text')
+                if content_elem:
+                    content = content_elem.get_text(separator=' ', strip=True)
+                img_elem = soup.select_one('div.text img, .photo img')
+                if img_elem and img_elem.get('src'):
+                    image_url = img_elem['src']
+
+            elif 'chosun.com' in domain:  # 조선일보
+                # 조선일보 콘텐츠 추출 개선
+                content_elem = soup.select_one('div.news_body, #news_body_id, .article, .article-body, section#article_body')
+                if content_elem:
+                    content = content_elem.get_text(separator=' ', strip=True)
+                    logger.info(f"조선일보 본문 추출 성공: {len(content)}자")
+                else:
+                    # 다른 선택자 시도
+                    alternative_selectors = ['div.article-text', 'div.article_body', 'div.news-detail-body', 'section.article-body']
+                    for selector in alternative_selectors:
+                        elem = soup.select_one(selector)
+                        if elem:
+                            content = elem.get_text(separator=' ', strip=True)
+                            logger.info(f"조선일보 대체 선택자({selector})로 본문 추출: {len(content)}자")
+                            break
+
+                # 오픈그래프 이미지 확인 (신뢰할 수 있는 이미지 소스)
+                og_image = soup.select_one('meta[property="og:image"]')
+                if og_image and og_image.get('content'):
+                    image_url = og_image.get('content')
+                    logger.info(f"조선일보 og:image 태그에서 이미지 찾음: {image_url}")
+                else:
+                    # 이미지 요소 찾기
+                    img_elem = soup.select_one('.news_body img, .photo img, .article img, .article-img img')
+                    if img_elem and img_elem.get('src'):
+                        image_url = img_elem['src']
+                        logger.info(f"조선일보 본문에서 이미지 찾음: {image_url}")
+
+            elif 'yna.co.kr' in domain:  # 연합뉴스
+                content_elem = soup.select_one('div.story-news-body, .article-body, .story')
+                if content_elem:
+                    content = content_elem.get_text(separator=' ', strip=True)
+                img_selectors = ['.story img', '.article-photo img', '.photo img', '.image img']
+                for selector in img_selectors:
+                    img_elem = soup.select_one(selector)
+                    if img_elem and img_elem.get('src'):
+                        src = img_elem['src']
+                        if 'placeholder' not in src.lower() and 'logo' not in src.lower():
+                            if src.startswith('/'):
+                                parsed = urlparse(url)
+                                src = f"{parsed.scheme}://{parsed.netloc}{src}"
+                            image_url = src
+                            break
+
+            elif 'news.kbs.co.kr' in domain:  # KBS
+                content_elem = soup.select_one('div.detail-body, .news-content, .article-body')
+                if content_elem:
+                    content = content_elem.get_text(separator=' ', strip=True)
+                img_elem = soup.select_one('.detail-body img, .news-content img')
+                if img_elem and img_elem.get('src'):
+                    image_url = img_elem['src']
+
+            elif 'ytn.co.kr' in domain:  # YTN
+                content_elem = soup.select_one('div.article-txt, .news-content')
+                if content_elem:
+                    content = content_elem.get_text(separator=' ', strip=True)
+                img_elem = soup.select_one('.article-txt img, .news-content img')
+                if img_elem and img_elem.get('src'):
+                    image_url = img_elem['src']
+
+            elif 'khan.co.kr' in domain:  # 경향신문
+                content_elem = soup.select_one('div.art_body, .article-body')
+                if content_elem:
+                    content = content_elem.get_text(separator=' ', strip=True)
+                img_elem = soup.select_one('.art_body img, .article-body img')
+                if img_elem and img_elem.get('src'):
+                    image_url = img_elem['src']
+
+            elif 'donga.com' in domain:  # 동아일보
+                content_elem = soup.select_one('div.article_txt, .news_view')
+                if content_elem:
+                    content = content_elem.get_text(separator=' ', strip=True)
+                img_elem = soup.select_one('.article_txt img, .news_view img')
+                if img_elem and img_elem.get('src'):
+                    image_url = img_elem['src']
+
+            # 해외 언론사들
+            elif 'bbci.co.uk' in domain:  # BBC
+                content_elem = soup.select_one('div[data-component="text-block"], .story-body')
+                if content_elem:
+                    content = content_elem.get_text(separator=' ', strip=True)
+                img_elem = soup.select_one('.story-body img, figure img')
+                if img_elem and img_elem.get('src'):
+                    image_url = img_elem['src']
+
+            elif 'cnn.com' in domain:  # CNN
+                content_elem = soup.select_one('div.zn-body__paragraph, .pg-rail-tall__body')
+                if content_elem:
+                    content = content_elem.get_text(separator=' ', strip=True)
+                img_elem = soup.select_one('.media__image img, .image img')
+                if img_elem and img_elem.get('src'):
+                    image_url = img_elem['src']
+
+            elif 'nytimes.com' in domain:  # NYT
+                content_elem = soup.select_one('section[name="articleBody"], .story-content')
+                if content_elem:
+                    content = content_elem.get_text(separator=' ', strip=True)
+                img_elem = soup.select_one('.story-content img, figure img')
+                if img_elem and img_elem.get('src'):
+                    image_url = img_elem['src']
+
+            # IT/기술 언론사들
+            elif 'zdnet.co.kr' in domain:  # ZDNet
+                content_elem = soup.select_one('div.view_content, .article-body')
+                if content_elem:
+                    content = content_elem.get_text(separator=' ', strip=True)
+                img_elem = soup.select_one('.view_content img, .article-body img')
+                if img_elem and img_elem.get('src'):
+                    image_url = img_elem['src']
+
+            elif 'etnews.com' in domain:  # 전자신문
+                content_elem = soup.select_one('div.article_body, .news_body')
+                if content_elem:
+                    content = content_elem.get_text(separator=' ', strip=True)
+                img_elem = soup.select_one('.article_body img, .news_body img')
+                if img_elem and img_elem.get('src'):
+                    image_url = img_elem['src']
+
+            elif 'bloter.net' in domain:  # 블로터
+                content_elem = soup.select_one('div.entry-content, .post-content')
+                if content_elem:
+                    content = content_elem.get_text(separator=' ', strip=True)
+                img_elem = soup.select_one('.entry-content img, .post-content img')
+                if img_elem and img_elem.get('src'):
+                    image_url = img_elem['src']
+
+            # 일반 사이트 (나머지 모든 사이트)
+            if not content:
+                selectors = [
+                    'article', 'div.article-body', 'div.content', 'div.post-content',
+                    'div.entry-content', 'div.story', 'main', '.main-content',
+                    'div.news-content', 'div.text', '#content', '.content-body'
+                ]
+                for selector in selectors:
+                    elem = soup.select_one(selector)
+                    if elem:
+                        text = elem.get_text(separator=' ', strip=True)
+                        if len(text) > 100:
+                            content = text
+                            break
+
+            # 일반 이미지 추출 (위에서 찾지 못한 경우)
+            if not image_url:
+                # 먼저 오픈그래프 이미지 확인 (많은 사이트가 지원)
+                og_image = soup.select_one('meta[property="og:image"], meta[name="og:image"], meta[name="twitter:image"]')
+                if og_image and og_image.get('content'):
+                    image_url = og_image.get('content')
+                    logger.info(f"og:image/twitter:image 메타 태그에서 이미지 찾음: {image_url}")
+
+                # 이미지 속성 확인 (일부 사이트는 다른 속성명 사용)
+                if not image_url:
+                    meta_tags = soup.select('meta')
+                    for meta in meta_tags:
+                        property_val = meta.get('property', '').lower()
+                        name_val = meta.get('name', '').lower()
+                        if 'image' in property_val or 'image' in name_val:
+                            if meta.get('content'):
+                                image_url = meta.get('content')
+                                logger.info(f"다른 메타 이미지 태그에서 이미지 찾음: {image_url}")
+                                break
+
+                # RSS 피드에서 자주 사용하는 media:content 태그 확인
+                if not image_url:
+                    media_content = soup.select_one('media\\:content, media:content')
+                    if media_content and media_content.get('url'):
+                        image_url = media_content.get('url')
+                        logger.info(f"media:content 태그에서 이미지 찾음: {image_url}")
+
+                # itemprop="image" 속성 찾기
+                if not image_url:
+                    img_prop = soup.select_one('[itemprop="image"]')
+                    if img_prop:
+                        if img_prop.name == 'img' and img_prop.get('src'):
+                            image_url = img_prop.get('src')
+                        elif img_prop.get('content'):
+                            image_url = img_prop.get('content')
+                        logger.info(f"itemprop=image 속성에서 이미지 찾음: {image_url}")
+
+                # 여전히 이미지가 없으면 여러 선택자 시도
+                if not image_url:
+                    # 여러 선택자로 이미지 시도 (더 많은 선택자 추가)
+                    img_selectors = [
+                        'article img', 'div.content img', '.main-image img',
+                        'figure img', '.article-body img', '.article img',
+                        '.image img', '.img img', 'div img', '.thumbnail img',
+                        '.post-thumbnail img', '.featured-image img', '.entry-thumbnail img',
+                        '.thumb img', '.entry img', '.wp-post-image', '.card img',
+                        'img.img-responsive', 'img.img-fluid', '.img-container img'
+                    ]
+                    for selector in img_selectors:
+                        images = soup.select(selector)
+                        for img in images:
+                            if img and img.get('src'):
+                                src = img['src']
+                                # 제외할 이미지 패턴: 오디오 버튼, SVG, 작은 아이콘, 로고, 플레이스홀더
+                                excluded_patterns = ['audio_play', '.svg', 'logo', 'placeholder', 'icon', 'button', 'blank.gif', 'spacer', 'spinner', 'loading']
+                                if not any(pattern in src.lower() for pattern in excluded_patterns) and (src.endswith('.jpg') or src.endswith('.jpeg') or src.endswith('.png') or src.endswith('.gif') or src.endswith('.webp') or '/images/' in src.lower() or '/img/' in src.lower()):
+                                    # 상대 경로 처리
+                                    if src.startswith('/'):
+                                        parsed = urlparse(url)
+                                        src = f"{parsed.scheme}://{parsed.netloc}{src}"
+
+                                    # 이미지 크기 확인 (가능한 경우)
+                                    is_small_icon = False
+                                    width = img.get('width', '0')
+                                    height = img.get('height', '0')
+
+                                    try:
+                                        if width and int(width) < 100:
+                                            is_small_icon = True
+                                        if height and int(height) < 100:
+                                            is_small_icon = True
+                                    except:
+                                        pass
+
+                                    if not is_small_icon:
+                                        image_url = src
+                                        logger.info(f"적합한 이미지 찾음: {image_url}")
+                                        break
+
+                        if image_url:  # 이미지를 찾았으면 루프 종료
+                            break
+
+            # 본문이 짧으면 p 태그들 조합
+            if len(content) < 100:
+                paragraphs = soup.select('p')
+                content = ' '.join([p.get_text(strip=True) for p in paragraphs if len(p.get_text(strip=True)) > 20])
+
+            result['content'] = content
+            result['image_url'] = image_url
+
+            # 기존 AI 요약 로직 추가 (충분한 길이의 본문이 있을 때만, 그리고 AI 요약이 없을 때만)
+            # 요약 중복 방지: DB에서 해당 기사의 요약 정보 확인
+            try:
+                url_hash = hashlib.md5(url.encode()).hexdigest()
+                existing_article = news_collection.find_one({"url_hash": url_hash})
+                has_existing_summary = existing_article and existing_article.get("summary") and len(existing_article.get("summary", "")) > 50
+
+                if has_existing_summary:
+                    # 기존 요약 정보 재사용
+                    logger.info("🔄 기존 AI 요약 재사용")
+                    result['ai_summary'] = existing_article.get("summary", "")
+                    result['ai_keywords'] = existing_article.get("keywords", [])
+                    result['trust_score'] = existing_article.get("trust_score", 0.5)
+                    result['sentiment_score'] = existing_article.get("sentiment_score", 0)
+                    result['ai_enhanced'] = existing_article.get("ai_enhanced", False)
+                    logger.info(f"✅ 기존 AI 요약 적용됨")
+                elif content and len(content) >= 300 and not result.get('ai_summary'):
+                    # 새 요약 생성
+                    try:
+                        logger.info(f"🤖 AI 요약 시작: {len(content)}자")
+                        ai_result = self.langchain_service.analyze_news_sync("", content)
+
+                        if not "error" in ai_result:
+                            result['ai_summary'] = ai_result.get("summary", "")
+                            result['ai_keywords'] = ai_result.get("keywords", [])
+                            result['trust_score'] = min(1.0, float(ai_result.get("importance", 5)) / 10.0)
+
+                            sentiment_label = ai_result.get("sentiment", "neutral")
+                            if sentiment_label == "positive":
+                                result['sentiment_score'] = 0.7
+                            elif sentiment_label == "negative":
+                                result['sentiment_score'] = -0.7
+                            else:
+                                result['sentiment_score'] = 0
+
+                            result['ai_enhanced'] = True
+                            logger.info(f"✅ AI 요약 완료")
+                        else:
+                            logger.warning(f"⚠️ AI 요약 실패: {ai_result.get('error')}")
+                            result['ai_enhanced'] = False
+                    except Exception as e:
+                        logger.error(f"❌ AI 요약 오류: {str(e)}")
+                        result['ai_enhanced'] = False
+                else:
+                    logger.info("⏭️ AI 요약 건너뛰기: 조건 미충족(본문 짧음 또는 이미 요약 있음)")
+                    result['ai_enhanced'] = False
+            except Exception as e:
+                logger.error(f"❌ AI 요약 검사 오류: {str(e)}")
+                result['ai_enhanced'] = False
+            else:
+                result['ai_enhanced'] = False
+
+            logger.info(f"📄 HTML 파싱 결과: 본문 {len(content)}자, 이미지 {'있음' if image_url else '없음'}, AI 요약 {'완료' if result.get('ai_enhanced') else '생략'}")
+
+        except Exception as e:
+            logger.error(f"❌ 전체 언론사 추출 실패 {url}: {str(e)}")
+            result['error'] = str(e)
+
+        return result
+
     def _process_entry(self, entry: Dict[str, Any], source: str) -> Optional[Dict[str, Any]]:
         """Process a single RSS entry and extract article content with enhanced processing"""
         # Extract URL
@@ -250,6 +882,7 @@ class RSSCrawler:
             # 기존 기사도 반환하여 업데이트 기회 제공
             return {
                 "_id": existing["_id"],
+                "id": existing["_id"],  # id 필드도 명시적으로 추가
                 "url": url,
                 "title": entry.get('title', '').strip(),
                 "source": source,
@@ -684,16 +1317,19 @@ class RSSCrawler:
         logger.info(f"📊 현재 DB 기사 수: {existing_count}개")
 
         # 카테고리별 통계
-        categories = {}
+        category_stats = {}
         for article in articles:
-            category = article.get("category", "미분류")
-            if category in categories:
-                categories[category] += 1
-            else:
-                categories[category] = 1
+            article_categories = article.get("categories", ["미분류"])
+            if not article_categories:
+                article_categories = ["미분류"]
+            for category in article_categories:
+                if category in category_stats:
+                    category_stats[category] += 1
+                else:
+                    category_stats[category] = 1
 
         # 카테고리 통계 출력
-        for category, count in categories.items():
+        for category, count in category_stats.items():
             logger.info(f"📂 카테고리 '{category}': {count}개 기사")
 
         saved_count = 0
@@ -752,6 +1388,64 @@ class RSSCrawler:
 
 
 # Helper function to run crawler
+# 추출에 실패한 기사를 강제로 처리하는 함수
+def force_update_failed_articles():
+    """HTML 파싱에 실패한 기사들의 이미지를 저장하고 is_basic_info=False로 설정"""
+    logger.info("🔄 추출 실패 기사 강제 처리 시작...")
+
+    # 1. 내용이 없지만 HTML 파싱을 시도한 기사 찾기 (is_basic_info=True)
+    failed_articles = list(news_collection.find({"is_basic_info": True}))
+    logger.info(f"📊 처리 대상 기사: {len(failed_articles)}개")
+
+    updated_count = 0
+    for article in failed_articles:
+        try:
+            # 조선일보 OpenGraph 이미지 URL 직접 검색
+            if "chosun.com" in article.get("url", ""):
+                try:
+                    import requests
+                    from bs4 import BeautifulSoup
+
+                    # 페이지 가져오기
+                    response = requests.get(article["url"], timeout=10)
+                    soup = BeautifulSoup(response.text, "html.parser")
+
+                    # OpenGraph 이미지 찾기
+                    og_image = soup.select_one('meta[property="og:image"]')
+                    if og_image and og_image.get('content'):
+                        image_url = og_image.get('content')
+                        logger.info(f"🖼️ 조선일보 기사 OpenGraph 이미지 찾음: {image_url}")
+
+                        # 이미지 URL 업데이트
+                        news_collection.update_one(
+                            {'_id': article['_id']},
+                            {'$set': {
+                                'image_url': image_url,
+                                'is_basic_info': False,
+                                'updated_at': datetime.utcnow()
+                            }}
+                        )
+                        updated_count += 1
+                        continue
+                except Exception as e:
+                    logger.error(f"조선일보 OpenGraph 이미지 검색 오류: {str(e)}")
+
+            # 기본 처리: is_basic_info=False로 설정하여 표시되도록 함
+            news_collection.update_one(
+                {'_id': article['_id']},
+                {'$set': {
+                    'is_basic_info': False,
+                    'updated_at': datetime.utcnow()
+                }}
+            )
+            updated_count += 1
+
+        except Exception as e:
+            logger.error(f"기사 강제 업데이트 오류: {str(e)}")
+
+    logger.info(f"✅ 총 {updated_count}개 기사 강제 처리 완료")
+
+
 def run_crawler() -> int:
     """Run the RSS crawler"""
     logger.info("🚀 [크롤러] RSS 수집 시작")
@@ -761,9 +1455,44 @@ def run_crawler() -> int:
         articles_count = crawler.crawl_and_save()
         logger.info(f"✅ [크롤러] RSS 수집 완료: {articles_count}개 기사 저장됨")
 
+        # 모든 언론사 대응 고급 파이프라인
+        logger.info("🚀 전체 언론사 대응 파이프라인 시작...")
+
+        # 더 많은 기사를 처리하기 위해 여러 번 파이프라인 실행
+        total_enhanced = 0
+        max_iterations = 2  # 최대 2번으로 축소하여 API 비용 절감
+
+        # 현재 대기 중인 기사 수 확인
+        pending_articles_count = news_collection.count_documents({"is_basic_info": True})
+        logger.info(f"⏳ 대기 중인 전체 기사 수: {pending_articles_count}개")
+
+        # 대기 중인 기사가 많지 않으면 한 번만 실행
+        if pending_articles_count <= 20:
+            max_iterations = 1
+            logger.info(f"🔄 대기 기사가 적어 1회만 실행합니다.")
+
+        for i in range(max_iterations):
+            enhanced_count = crawler.enhance_all_news_sources()
+            total_enhanced += enhanced_count
+            logger.info(f"🔄 파이프라인 실행 {i+1}/{max_iterations}: {enhanced_count}개 기사 처리됨")
+
+            # 더 이상 처리할 기사가 없으면 종료
+            if enhanced_count == 0:
+                break
+
+        logger.info(f"🎉 전체 언론사 파이프라인 완료: 총 {total_enhanced}개 기사 처리됨")
+
         # 실제 저장된 기사 수 확인
         db_articles_count = news_collection.count_documents({})
         logger.info(f"📊 실제 DB 저장 기사 수: {db_articles_count}개")
+
+        # 카테고리 정보 유실 감지 및 로깅
+        no_category_count = news_collection.count_documents({"categories": {"$exists": False}})
+        empty_category_count = news_collection.count_documents({"categories": []})
+        logger.info(f"⚠️ 카테고리 없는 기사: {no_category_count}개, 빈 카테고리 기사: {empty_category_count}개")
+
+        # 추출에 실패한 기사를 강제로 처리
+        force_update_failed_articles()
 
         return articles_count
     except Exception as e:

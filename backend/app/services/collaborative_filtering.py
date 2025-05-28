@@ -288,7 +288,7 @@ class CollaborativeFilteringService:
             interacted_news_ids.add(news_id)
 
             # Try to get the news details
-            news = news_collection.find_one({"_id": news_id})
+            news = news_collection.find_one({"_id": news_id, "is_basic_info": False})
             if news:
                 categories.extend(news.get("categories", []))
                 topics.extend(news.get("keywords", []))
