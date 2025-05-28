@@ -43,8 +43,8 @@ export function useNews(options: UseNewsOptions = {}) {
     } catch (err) {
       console.error('뉴스 데이터 로드 실패:', err);
       const errMsg = category
-        ? `${category} 카테고리 뉴스를 가져오는 중 오류가 발생했습니다`
-        : '뉴스를 가져오는 중 오류가 발생했습니다';
+        ? `${category} 카테고리 뉴스를 가져오는 중 오류가 발생했습니다. 백엔드 서버 연결을 확인해주세요.`
+        : '뉴스를 가져오는 중 오류가 발생했습니다. 백엔드 서버 연결을 확인해주세요.';
       setError(errMsg);
       // 오류 발생 시 빈 배열 설정
       setNews([]);
@@ -86,7 +86,7 @@ export function useNews(options: UseNewsOptions = {}) {
       setNews(formattedNews);
     } catch (err) {
       console.error('트렌딩 뉴스 로드 실패:', err);
-      setError('트렌딩 뉴스를 가져오는 중 오류가 발생했습니다');
+      setError('트렌딩 뉴스를 가져오는 중 오류가 발생했습니다. 백엔드 서버 연결을 확인해주세요.');
       // 오류 발생 시 빈 배열 설정
       setNews([]);
     } finally {

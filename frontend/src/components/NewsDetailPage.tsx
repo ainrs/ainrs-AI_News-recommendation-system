@@ -19,6 +19,89 @@ import NewsComments from '@/components/NewsComments';
 import NewsAIAnalysis from '@/components/NewsAIAnalysis';
 import NewsQuestionAnswering from '@/components/NewsQuestionAnswering';
 
+// 유효하지 않은 이미지를 확인하는 함수
+function isInvalidImage(url: string): boolean {
+  if (!url) return true;
+
+  // 유효하지 않은 이미지 패턴 목록
+  const invalidPatterns = [
+    'audio_play',
+    '.svg',
+    'static/media',
+    'icon',
+    'logo',
+    'button',
+    'favicon',
+  ];
+
+  // 이미지 URL에 유효한 확장자가 있는지 확인
+  const validExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp'];
+  const hasValidExtension = validExtensions.some((ext) =>
+    url.toLowerCase().includes(ext)
+  );
+
+  // 특정 뉴스 사이트 이미지 예외 처리
+  // 조선일보
+  if (url.includes('chosun.com/resizer') && hasValidExtension) {
+    console.log('조선일보 이미지 URL 예외 허용:', url);
+    return false;
+  }
+
+  // BBC 이미지
+  if (url.includes('ichef.bbci.co.uk/news')) {
+    console.log('BBC 이미지 URL 허용:', url);
+    return false;
+  }
+
+  // 연합뉴스
+  if (url.includes('img.yna.co.kr') && hasValidExtension) {
+    console.log('연합뉴스 이미지 URL 허용:', url);
+    return false;
+  }
+
+  // 오픈그래프 이미지는 일반적으로 유효함
+  if (
+    (url.includes('/og_') || url.includes('/opengraph/')) &&
+    hasValidExtension
+  ) {
+    console.log('오픈그래프 이미지 URL 허용:', url);
+    return false;
+  }
+
+  // feedburner 및 기타 RSS 피드 서비스 이미지 처리
+  if (url.includes('feedburner.com') || url.includes('feedsportal.com')) {
+    // feedburner 이미지가 실제로 존재하는지 확인하는 로직이 필요할 수 있음
+    return false; // 일단 허용
+  }
+
+  // 이미지 URL에 일반적인 이미지 호스팅 서비스 패턴이 있는지 확인
+  const imageHostingPatterns = [
+    'i.imgur.com',
+    'images.unsplash.com',
+    'media.cnn.com',
+    'img.youtube.com',
+    'i0.wp.com',
+    'i1.wp.com',
+    'i2.wp.com',
+    'image.ytn.co.kr',
+    'image.aitimes.com',
+    'photo.jtbc.co.kr',
+    'images.khan.co.kr',
+    'news.kbs.co.kr/data',
+    'imgnews.pstatic.net'
+  ];
+
+  if (imageHostingPatterns.some(pattern => url.includes(pattern))) {
+    console.log('이미지 호스팅 서비스에서 이미지 허용:', url);
+    return false;
+  }
+
+  // 패턴 매칭 (유효하지 않은 패턴 포함 여부 확인)
+  return invalidPatterns.some((pattern) =>
+    url.toLowerCase().includes(pattern)
+  );
+}
+
 export default function NewsDetailPage({ newsId }: { newsId: string }) {
   const router = useRouter();
   const { user, isAuthenticated } = useAuth();
@@ -57,10 +140,13 @@ export default function NewsDetailPage({ newsId }: { newsId: string }) {
       // AI 분석 데이터 가져오기
       fetchAiAnalysis();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [newsId, isAuthenticated, user]);
 
   // 사용자 상호작용 기록
-  const recordInteraction = async (type: 'view' | 'click' | 'read' | 'like' | 'share') => {
+  const recordInteraction = async (
+    type: 'view' | 'click' | 'read' | 'like' | 'share'
+  ) => {
     if (!isAuthenticated || !user) return;
 
     try {
@@ -79,7 +165,7 @@ export default function NewsDetailPage({ newsId }: { newsId: string }) {
         const query = `${currentNews.title} ${currentNews.summary || ''}`;
         const related = await apiClient.ai.searchNewsByVector(query, 4);
         // 현재 뉴스는 필터링
-        setRelatedNews(related.filter(news => news.id !== newsId));
+        setRelatedNews(related.filter((news) => news.id !== newsId));
       }
     } catch (error) {
       console.error('관련 뉴스를 가져오는 중 오류:', error);
@@ -97,8 +183,8 @@ export default function NewsDetailPage({ newsId }: { newsId: string }) {
           label: 'neutral',
           positive: 0.33,
           negative: 0.33,
-          neutral: 0.34
-        }
+          neutral: 0.34,
+        },
       };
       let keywordAnalysis = { key_phrases: [] };
       let summarization = { summary: '' };
@@ -139,10 +225,10 @@ export default function NewsDetailPage({ newsId }: { newsId: string }) {
           label: sentimentAnalysis?.sentiment?.label || 'neutral',
           positive: sentimentAnalysis?.sentiment?.positive || 0.33,
           negative: sentimentAnalysis?.sentiment?.negative || 0.33,
-          neutral: sentimentAnalysis?.sentiment?.neutral || 0.34
+          neutral: sentimentAnalysis?.sentiment?.neutral || 0.34,
         },
         keyPhrases: keywordAnalysis?.key_phrases || [],
-        summary: summarization?.summary || '요약을 생성할 수 없습니다.'
+        summary: summarization?.summary || '요약을 생성할 수 없습니다.',
       });
     } catch (error) {
       console.error('AI 분석 데이터를 가져오는 중 오류:', error);
@@ -154,10 +240,10 @@ export default function NewsDetailPage({ newsId }: { newsId: string }) {
           label: 'neutral',
           positive: 0.33,
           negative: 0.33,
-          neutral: 0.34
+          neutral: 0.34,
         },
         keyPhrases: [],
-        summary: '요약을 생성할 수 없습니다.'
+        summary: '요약을 생성할 수 없습니다.',
       });
     }
   };
@@ -227,10 +313,7 @@ export default function NewsDetailPage({ newsId }: { newsId: string }) {
                 <p className="text-muted-foreground">
                   요청하신 뉴스를 찾을 수 없거나 접근할 수 없습니다.
                 </p>
-                <Button
-                  className="mt-4"
-                  onClick={() => router.push('/')}
-                >
+                <Button className="mt-4" onClick={() => router.push('/')}>
                   홈으로 돌아가기
                 </Button>
               </CardContent>
@@ -265,7 +348,7 @@ export default function NewsDetailPage({ newsId }: { newsId: string }) {
           <article className="bg-white border rounded-lg p-6 mb-6">
             {/* 뉴스 카테고리 */}
             <div className="flex flex-wrap gap-2 mb-4">
-              {newsItem.categories.map(category => (
+              {newsItem.categories && newsItem.categories.map((category: string) => (
                 <Link
                   key={category}
                   href={`/?category=${encodeURIComponent(category)}`}
@@ -296,12 +379,18 @@ export default function NewsDetailPage({ newsId }: { newsId: string }) {
             </div>
 
             {/* 뉴스 썸네일 */}
-            {newsItem.imageUrl && (
+            {newsItem.imageUrl && !isInvalidImage(newsItem.imageUrl) && (
               <div className="mb-6 rounded-md overflow-hidden">
                 <img
                   src={newsItem.imageUrl}
                   alt={newsItem.title}
                   className="object-cover w-full max-h-96 rounded-md"
+                  onError={(e) => {
+                    console.log('썸네일 이미지 로드 오류, 대체 이미지 사용');
+                    (e.target as HTMLImageElement).src =
+                      'https://via.placeholder.com/800x450?text=뉴스+이미지';
+                    (e.target as HTMLImageElement).onerror = null; // 무한 루프 방지
+                  }}
                 />
               </div>
             )}
@@ -318,11 +407,15 @@ export default function NewsDetailPage({ newsId }: { newsId: string }) {
                   )}
                 </h3>
                 <p className="text-blue-800">
-                  {(aiAnalysis.summary && aiAnalysis.summary !== newsItem.content && aiAnalysis.summary.length > 20)
+                  {aiAnalysis.summary &&
+                  aiAnalysis.summary !== newsItem.content &&
+                  aiAnalysis.summary.length > 20
                     ? aiAnalysis.summary
-                    : (newsItem.summary && newsItem.summary !== newsItem.content && newsItem.summary.length > 20)
-                      ? newsItem.summary
-                      : "이 뉴스의 요약을 생성할 수 없습니다."}
+                    : newsItem.summary &&
+                      newsItem.summary !== newsItem.content &&
+                      newsItem.summary.length > 20
+                    ? newsItem.summary
+                    : '이 뉴스의 요약을 생성할 수 없습니다.'}
                 </p>
               </div>
             )}
@@ -360,56 +453,70 @@ export default function NewsDetailPage({ newsId }: { newsId: string }) {
                 </div>
               )}
             </div>
+
             {/* 뉴스 컨텐츠 표시 - 한국어 기사 포맷에 맞게 조정 */}
             <div className="prose max-w-none mb-6">
               {/* 뉴스 내용 헤더 - 눈에 띄게 표시 */}
-              <h3 className="text-lg font-bold text-gray-800 mb-4 border-b pb-2">뉴스 본문</h3>
+              <h3 className="text-lg font-bold text-gray-800 mb-4 border-b pb-2">
+                뉴스 본문
+              </h3>
 
-              {/* 이미지 URL 확인 및 이미지 표시 - 어떤 형태로든 이미지가 있으면 표시 */}
-              {(newsItem.imageUrl || newsItem.image_url) && (
-                <div className="mb-6 rounded-md overflow-hidden">
-                  <img
-                    src={newsItem.imageUrl || newsItem.image_url}
-                    alt={newsItem.title}
-                    className="object-cover w-full max-h-96 rounded-md"
-                  />
-                </div>
-              )}
+              {/* 본문 내에 이미지 중복 표시 방지 - 썸네일에 이미 표시되었으므로 본문에서는 제거 */}
 
               {/* 본문 내용이 비어있지 않은지 확인 */}
               {newsItem.content && newsItem.content.trim() ? (
                 // 본문 내용 표시
-                newsItem.content
-                  .split('\n')
-                  .map((paragraph, idx) => paragraph.trim())
-                  .filter(Boolean) // 빈 문단 제거
-                  .map((paragraph, idx) => {
-                    // 첫 단락은 들여쓰기 없이 볼드체로
-                    if (idx === 0) {
-                      return (
-                        <p key={idx} className="font-medium leading-relaxed my-4">
-                          {paragraph}
-                        </p>
-                      );
-                    }
+                <>
+                  {/* 본문 내용이 너무 짧으면 대체 메시지 표시 */}
+                  {newsItem.content.trim().length < 100 ? (
+                    <div className="p-4 bg-yellow-50 rounded-md text-gray-700 mb-4">
+                      <p>전체 뉴스 내용을 보려면 아래 원문 링크를 클릭하세요.</p>
+                      {newsItem.content && (
+                        <p className="mt-2 font-medium">{newsItem.content}</p>
+                      )}
+                    </div>
+                  ) : (
+                    // 충분히 긴 내용이 있는 경우 정상 표시
+                    newsItem.content
+                      .split('\n')
+                      .map((paragraph: string) => paragraph.trim())
+                      .filter(Boolean) // 빈 문단 제거
+                      .map((paragraph: string, idx: number) => {
+                        // 첫 단락은 들여쓰기 없이 볼드체로
+                        if (idx === 0) {
+                          return (
+                            <p key={idx} className="font-medium leading-relaxed my-4">
+                              {paragraph}
+                            </p>
+                          );
+                        }
 
-                    // 인용구 감지 (따옴표로 시작하는 경우)
-                    if (paragraph.startsWith('"') || paragraph.startsWith('"') ||
-                        paragraph.startsWith('\'') || paragraph.startsWith('"')) {
-                      return (
-                        <blockquote key={idx} className="italic border-l-4 border-gray-300 pl-4 my-4">
-                          {paragraph}
-                        </blockquote>
-                      );
-                    }
+                        // 인용구 감지 (따옴표로 시작하는 경우)
+                        if (
+                          paragraph.startsWith('"') ||
+                          paragraph.startsWith('"') ||
+                          paragraph.startsWith("'") ||
+                          paragraph.startsWith("'")
+                        ) {
+                          return (
+                            <blockquote
+                              key={idx}
+                              className="italic border-l-4 border-gray-300 pl-4 my-4"
+                            >
+                              {paragraph}
+                            </blockquote>
+                          );
+                        }
 
-                    // 일반 단락 - 적절한 들여쓰기와 줄간격
-                    return (
-                      <p key={idx} className="indent-4 my-4 leading-relaxed">
-                        {paragraph}
-                      </p>
-                    );
-                  })
+                        // 일반 단락 - 적절한 들여쓰기와 줄간격
+                        return (
+                          <p key={idx} className="indent-4 my-4 leading-relaxed">
+                            {paragraph}
+                          </p>
+                        );
+                      })
+                  )}
+                </>
               ) : (
                 // 본문이 비어있는 경우 대체 메시지 표시
                 <div className="p-4 bg-gray-100 rounded-md text-gray-600">
@@ -441,7 +548,7 @@ export default function NewsDetailPage({ newsId }: { newsId: string }) {
                 comments: 0,
                 shares: 0,
                 trustScore: aiAnalysis.trustScore,
-                sentimentScore: aiAnalysis.sentimentScore
+                sentimentScore: aiAnalysis.sentimentScore,
               }}
               onCommentClick={scrollToComments}
             />
@@ -455,15 +562,25 @@ export default function NewsDetailPage({ newsId }: { newsId: string }) {
             <div className="mb-8">
               <h2 className="text-xl font-bold mb-4">관련 뉴스</h2>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {relatedNews.map(item => (
-                  <Card key={item.id} className="overflow-hidden hover:shadow-md transition-shadow">
+                {relatedNews.map((item) => (
+                  <Card
+                    key={item.id}
+                    className="overflow-hidden hover:shadow-md transition-shadow"
+                  >
                     <Link href={`/news/${item.id}`}>
                       <div className="h-40 relative">
-                        {item.image_url ? (
+                        {item.image_url && !isInvalidImage(item.image_url) ? (
                           <img
                             src={item.image_url}
                             alt={item.title}
                             className="object-cover w-full h-full"
+                            onError={(e) => {
+                              console.log('이미지 로드 오류, 대체 이미지 사용');
+                              (e.target as HTMLImageElement).src =
+                                'https://via.placeholder.com/400x300?text=News+Image';
+                              // 무한 루프 방지
+                              (e.target as HTMLImageElement).onerror = null;
+                            }}
                           />
                         ) : (
                           <div className="h-full w-full bg-gray-100 flex items-center justify-center">
@@ -472,10 +589,14 @@ export default function NewsDetailPage({ newsId }: { newsId: string }) {
                         )}
                       </div>
                       <CardContent className="p-4">
-                        <h3 className="font-semibold line-clamp-2 mb-2">{item.title}</h3>
+                        <h3 className="font-semibold line-clamp-2 mb-2">
+                          {item.title}
+                        </h3>
                         <div className="flex justify-between text-xs text-gray-500">
                           <span>{item.source}</span>
-                          <span>{new Date(item.published_date).toLocaleDateString()}</span>
+                          <span>
+                            {new Date(item.published_date).toLocaleDateString()}
+                          </span>
                         </div>
                       </CardContent>
                     </Link>

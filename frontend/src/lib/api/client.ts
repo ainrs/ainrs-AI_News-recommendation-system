@@ -6,7 +6,7 @@
 import { type News, type NewsSummary, NewsSearchQuery, type HealthCheckResponse } from './types';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
-const API_TIMEOUT = 30000; // 30초 타임아웃 (신뢰도 분석, RAG 검색 등 시간이 오래 걸리는 작업을 위해 증가)
+const API_TIMEOUT = 30000; // 30초 타임아웃 (AI 분석 작업을 위해 시간 연장)
 
 /**
  * API 요청을 처리하는 기본 함수
@@ -108,7 +108,7 @@ async function fetchApi<T = unknown>(
 async function fetchApiWithRetry<T = unknown>(
   endpoint: string,
   options: RequestInit = {},
-  maxRetries = 3,
+  maxRetries = 2,
   retryDelay = 1000
 ): Promise<T> {
   let lastError: Error | null = null;
@@ -116,10 +116,11 @@ async function fetchApiWithRetry<T = unknown>(
   // 재시도 횟수만큼 반복
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
-      // 첫 시도가 아니면 잠시 대기
+      // 첫 시도가 아니면 잠시 대기 (재시도마다 대기 시간 증가)
       if (attempt > 0) {
-        console.log(`🔄 API 요청 재시도 ${attempt}/${maxRetries}: ${endpoint}`);
-        await new Promise(resolve => setTimeout(resolve, retryDelay));
+        const currentDelay = retryDelay * attempt; // 점점 더 오래 기다림
+        console.log(`🔄 API 요청 재시도 ${attempt}/${maxRetries}: ${endpoint}, ${currentDelay}ms 대기 후 시도`);
+        await new Promise(resolve => setTimeout(resolve, currentDelay));
       }
 
       // API 호출 시도
@@ -128,17 +129,10 @@ async function fetchApiWithRetry<T = unknown>(
       // 오류 저장
       lastError = error instanceof Error ? error : new Error('알 수 없는 오류');
 
-      // 연결 거부 오류인 경우만 재시도 (서버가 준비 중)
-      if (
-        lastError.message.includes('Failed to fetch') ||
-        lastError.message.includes('시간 초과') ||
-        lastError.message.includes('timeout') ||
-        lastError.message.includes('중단되었습니다')
-      ) {
-        // 마지막 시도가 아니면 계속 진행
-        if (attempt < maxRetries) continue;
-      } else {
-        // 다른 오류는 바로 실패 처리
+      // 타임아웃이 빨리 발생하도록 하고, 빠르게 실패를 반환합니다
+      if (attempt >= maxRetries) {
+        // 최대 재시도 횟수 도달 시
+        console.error(`⚠️ API 요청 최대 재시도 횟수(${maxRetries}) 도달: ${endpoint}`);
         break;
       }
     }

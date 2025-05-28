@@ -7,9 +7,9 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 
 interface NewsPageParams {
-  params: {
+  params: Promise<{
     id: string;
-  };
+  }>;
 }
 
 // 이 함수는 서버에서 실행되며 뉴스 데이터를 가져옵니다
@@ -39,8 +39,8 @@ export async function generateMetadata({ params }: NewsPageParams): Promise<Meta
   let title = `뉴스 | 버라이어티.AI`;
   let description = '버라이어티.AI 뉴스 상세 정보';
 
-  // params.id는 Promise를 통해 접근
-  const id = params.id;
+  // params를 await로 접근
+  const { id } = await params;
 
   // ID 유효성 검사를 비동기 함수 내에서 처리
   if (!id || !isValidId(id)) {
@@ -87,8 +87,8 @@ function isValidId(id: string): boolean {
 }
 
 export default async function NewsPage({ params }: NewsPageParams) {
-  // params.id를 상수에 저장하여 사용
-  const id = params.id;
+  // params를 await로 접근
+  const { id } = await params;
 
   // URL 파라미터 유효성 검사
   if (!isValidId(id)) {

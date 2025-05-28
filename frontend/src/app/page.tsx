@@ -123,11 +123,11 @@ export default function Home() {
                 <ClientDateDisplay />
               </div>
 
-              {/* 주요 뉴스 */}
+              {/* 주요 뉴스 - 모든 카테고리의 신뢰도 높은 최신 뉴스 */}
               <NewsSection
                 title="주요 뉴스"
-                limit={3}
-                showTrending={true}
+                limit={4}
+                showTrending={false}
               />
 
               {/* 섹션별 뉴스 */}

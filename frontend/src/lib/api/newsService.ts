@@ -2,6 +2,38 @@ import { apiClient } from './client';
 import { type News, type NewsSummary, NewsSearchQuery } from './types';
 
 /**
+ * 유효하지 않은 이미지 URL을 필터링하는 함수
+ * SVG, 오디오 버튼 등 잘못된 이미지 URL을 필터링합니다.
+ */
+function filterInvalidImageUrl(url?: string): string {
+  if (!url) return '';
+
+  // 유효하지 않은 이미지 패턴 목록
+  const invalidPatterns = [
+    'audio_play',
+    '.svg',
+    'static/media',
+    'icon',
+    'logo',
+    'button'
+  ];
+
+  // 패턴 매칭
+  if (invalidPatterns.some(pattern => url.toLowerCase().includes(pattern))) {
+    console.log(`이미지 필터링: ${url} (유효하지 않은 이미지 패턴 감지)`);
+    return '';
+  }
+
+  // 올바른 URL 형식 검사
+  if (!url.startsWith('http')) {
+    console.log(`이미지 필터링: ${url} (올바른 URL 형식이 아님)`);
+    return '';
+  }
+
+  return url;
+}
+
+/**
  * 뉴스 서비스
  * 뉴스 데이터를 가져오고 처리하는 기능을 제공합니다.
  */
@@ -137,7 +169,7 @@ export const newsService = {
         day: 'numeric',
       }),
       author: news.author || '',
-      imageUrl: news.image_url || '',
+      imageUrl: filterInvalidImageUrl(news.image_url) || '',
       categories: news.categories || [],
       url: news.url || '',
       trustScore: news.trust_score || 0,

@@ -1,6 +1,30 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+
+// 유효하지 않은 이미지를 확인하는 함수
+function isInvalidImage(url: string): boolean {
+  if (!url) return true;
+
+  // 유효하지 않은 이미지 패턴 목록
+  const invalidPatterns = [
+    'audio_play',
+    '.svg',
+    'static/media',
+    'icon',
+    'logo',
+    'button'
+  ];
+
+  // 조선일보 이미지 리사이저 URL은 유효함 (예외 처리)
+  if (url.includes('chosun.com/resizer') && (url.includes('.jpg') || url.includes('.png') || url.includes('.jpeg'))) {
+    console.log('조선일보 이미지 URL 예외 허용:', url);
+    return false;
+  }
+
+  // 패턴 매칭
+  return invalidPatterns.some(pattern => url.toLowerCase().includes(pattern));
+}
 import Image from 'next/image';
 import Link from 'next/link';
 import { Card, CardContent, CardFooter } from '@/components/ui/card';
@@ -51,7 +75,15 @@ export function NewsSection({
       <section className="mb-10">
         <h2 className="section-heading">{title}</h2>
         <Alert variant="destructive" className="mb-4">
-          <AlertDescription>{error}</AlertDescription>
+          <AlertDescription>
+            {error}
+            <button
+              onClick={() => showTrending ? fetchTrendingNews() : fetchLatestNews()}
+              className="ml-2 text-sm underline text-blue-600 hover:text-blue-800"
+            >
+              다시 시도
+            </button>
+          </AlertDescription>
         </Alert>
       </section>
     );
@@ -99,7 +131,9 @@ export function NewsSection({
             <div className="w-full text-center py-6">
               <p className="text-muted-foreground mb-2">표시할 뉴스가 없습니다.</p>
               <p className="text-sm text-muted-foreground">
-                뉴스 데이터를 불러오는 중입니다... 잠시만 기다려주세요.
+                {category ?
+                  `${category} 카테고리의 뉴스를 불러오는 중입니다... 백엔드에서 HTML 파싱이 완료될 때까지 기다려주세요.` :
+                  '뉴스 데이터를 불러오는 중입니다... 잠시만 기다려주세요.'}
               </p>
               <button
                 className="mt-4 bg-[hsl(var(--variety-blue))] text-white px-4 py-2 rounded-md text-sm"
@@ -123,10 +157,36 @@ interface NewsCardProps {
 function NewsCard({ news }: NewsCardProps) {
   return (
     <Card className={`news-card ${news.aiEnhanced ? 'border-[hsl(var(--variety-blue))] border-opacity-60' : ''}`}>
-      {news.imageUrl && (
+      {news.imageUrl && !isInvalidImage(news.imageUrl) && (
         <div className="relative h-48">
           <Image
-            src={news.imageUrl || 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAZAAAADICAMAAAD2ShmzAAAAM1BMVEX////CwsL5+fnV1dXq6ur19fXg4OC8vLzT09Pt7e3Hx8fv7+/d3d3h4eHQ0NCwsLD///+ck8V3AAAACXBIWXMAAAsTAAALEwEAmpwYAAAD90lEQVR4nO3di5KjIBCFYQREvEDf/2UX0E2ceGlAiQy6/1fTtZVJ1SQndjtBr7IcZ7TqfnAZHhODu1cP/92V0tpqEz6BePgzcb/+Qb01hSK9VQeQKU6e0iJ6VXpRfFcfoAlbRZoiCCKEAEIIIIQAQggghABCCCCEAEIIBYUwU0kGsZoG8k4yiNPf1f9bvWQQ70zpSnnBILZcnhTLBbGutBDLfXbFBmF/CJQMwiXtsiDcrLJXJYNYZkpCsQghgBACCCGAEAIIIYAQQgEhk9UVMGhMMVQ3qGsZbZ+HGqY53jJp90Nouo2HUL2O/6pqpjmGQx6R9PlbY8+GUJ0+GTTHJdIhVGfOhFCdP7OT6qYTi6NvRULcR3UkBnVbXOUexFd2LkTVdjnRV3ZqIGbLXnp2Jb5T8dwcPrM5F8It/Ft48yrR3HbVHQ+hvlqfFwihL5cA4SCr1J0B8UWnPTKhvtfAu9ZQCB2sU85rCcyH0Nl65GQIXaj+T4doCtL4jAL3hWzpkahZXLsxO2tRFoIyIKV6ZDaEZmwDQlUHQVyhQkNo3g4gtPCDNkdVIJdDXJt0Y5xXcmMOyjXIpZNIGj3mZQgVPd4IQttaCqG1zfI1EFoNGc6HUNnD8URIYJ8QYzAiFMStzZGlENrYvhLSl2t20qUQYm1hq+wVh0Jo4UgIre6PQ6jocYi+XGXXJZdBaN2i4iFUdkVSPy7axrIglHdZXz/OwpW3UrMg3aYP+6HdTjdX8g/SPU6hgx32P4imbKF0z0txA+bZ0e3FNuX3LtfucWhbkofVU+DhXPe4FN4vQcfz2e4JH1DQ5zt8KftFuSDgk6Ou/AxoG/HZ7Mu1ouD5N2f/rLYxe1DGCDxj6ux7yjdC5P1S4Dlt5y2TvTIQRzV7XuDZiVcfUCJ4q8qXy2EJ3yrK5aA7e6/MhfAfQxcAoYc4UWflw0BFNKcdJPjZJQgBhBBACAGEEEAIAYQQQAgBhBBACAGEEEAIAYQQQAgBhBBACAGEEEAIAYQQQAgBhBBACAGEEEAIAYQQQAgBhBAWA8K9MlwI9ynhXqQsCOcXEWw3JQvCPRdcFMkgzEfJZZEMwv1g+EqJZBDuUcN+jgWDcL8h7rkkGYR7V3FPMO5lxEUSCXGPRuoNx0USCfd65d6zDIj+Moj+Moj+Moj+Moj+Moj++vMQ8tRCf/1lEP31l0H0FzV7YV9sMQ1Wf1Gz4QDC3XaYF1tUfGISrT91EUQI/WUQ/WUQ/WUQ/WUQ/UXNIJjfGYR5xUa0+NQZ1g8lzSCkGQT7uZ14Nd8QJt5fJIjDiqIAAAAASUVORK5CYII='}
+            src={news.imageUrl}
+            alt={news.title}
+            fill
+            className="object-cover"
+          />
+          {news.aiEnhanced && (
+            <div className="absolute top-2 right-2 bg-[hsl(var(--variety-blue))] text-white px-2 py-1 rounded-md text-xs font-medium z-10">
+              AI 강화
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* 이미지가 없을 때 대체 이미지 표시 */}
+      {(!news.imageUrl || isInvalidImage(news.imageUrl)) && (
+        <div className="relative h-48 bg-gray-100 flex items-center justify-center">
+          <div className="text-gray-400 text-center">
+            <svg className="w-12 h-12 mx-auto mb-2" fill="currentColor" viewBox="0 0 20 20">
+              <path fillRule="evenodd" d="M4 3a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V5a2 2 0 00-2-2H4zm12 12H4l4-8 3 6 2-4 3 6z" clipRule="evenodd" />
+            </svg>
+            <p className="text-sm">이미지 없음</p>
+          </div>
+          {news.aiEnhanced && (
+            <div className="absolute top-2 right-2 bg-[hsl(var(--variety-blue))] text-white px-2 py-1 rounded-md text-xs font-medium z-10">
+              AI 강화
+            </div>
+          )}
             alt={news.title}
             fill
             className="object-cover"
