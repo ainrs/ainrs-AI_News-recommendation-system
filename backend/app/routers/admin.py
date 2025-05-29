@@ -6,6 +6,8 @@ from bson import ObjectId
 from app.db.mongodb import get_mongodb_database
 from app.services.model_controller_service import ModelControllerService
 from app.services.scheduler import SchedulerService
+from app.services.summary_cache_service import get_summary_cache_service
+from app.services.performance_optimizer import get_performance_optimizer
 
 router = APIRouter(
     prefix="/admin",
@@ -480,3 +482,175 @@ async def run_scheduler_job_now(
         return {"message": f"Job {job_id} triggered successfully"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error triggering job: {str(e)}")
+
+# ============ 캐시 관리 API ============
+
+@router.get("/cache/stats")
+async def get_cache_stats(
+    user_id: str = Query(..., description="Admin user ID"),
+    admin_user = Depends(verify_admin)
+):
+    """
+    캐시 통계를 조회합니다.
+    """
+    try:
+        cache_service = get_summary_cache_service()
+        if not cache_service:
+            return {"error": "캐시 서비스가 초기화되지 않았습니다"}
+
+        stats = await cache_service.get_cache_stats()
+        return {
+            "success": True,
+            "data": stats
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"캐시 통계 조회 오류: {str(e)}")
+
+@router.post("/cache/cleanup")
+async def cleanup_expired_cache(
+    user_id: str = Query(..., description="Admin user ID"),
+    admin_user = Depends(verify_admin)
+):
+    """
+    만료된 캐시를 정리합니다.
+    """
+    try:
+        cache_service = get_summary_cache_service()
+        if not cache_service:
+            return {"error": "캐시 서비스가 초기화되지 않았습니다"}
+
+        deleted_count = await cache_service.cleanup_expired_cache()
+        return {
+            "success": True,
+            "message": f"만료된 캐시 {deleted_count}개 정리 완료",
+            "deleted_count": deleted_count
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"캐시 정리 오류: {str(e)}")
+
+@router.delete("/cache/clear")
+async def clear_all_cache(
+    user_id: str = Query(..., description="Admin user ID"),
+    confirm: bool = Query(False, description="확인 플래그"),
+    admin_user = Depends(verify_admin)
+):
+    """
+    모든 캐시를 삭제합니다. (개발/테스트용)
+    """
+    if not confirm:
+        raise HTTPException(status_code=400, detail="confirm=true로 설정해야 실행됩니다")
+
+    try:
+        cache_service = get_summary_cache_service()
+        if not cache_service:
+            return {"error": "캐시 서비스가 초기화되지 않았습니다"}
+
+        deleted_count = await cache_service.clear_all_cache()
+        return {
+            "success": True,
+            "message": f"전체 캐시 {deleted_count}개 삭제 완료",
+            "deleted_count": deleted_count
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"캐시 삭제 오류: {str(e)}")
+
+# 성능 모니터링 엔드포인트들
+@router.get("/performance/stats", response_model=Dict[str, Any])
+async def get_performance_stats(
+    user_id: str = Query(..., description="Admin user ID"),
+    admin_user = Depends(verify_admin)
+):
+    """
+    시스템 성능 통계를 조회합니다.
+    """
+    try:
+        performance_optimizer = get_performance_optimizer()
+        stats = performance_optimizer.get_performance_stats()
+        return {
+            "success": True,
+            "performance_stats": stats,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"성능 통계 조회 오류: {str(e)}")
+
+@router.post("/performance/optimize", response_model=Dict[str, Any])
+async def optimize_performance(
+    user_id: str = Query(..., description="Admin user ID"),
+    admin_user = Depends(verify_admin)
+):
+    """
+    메모리 최적화를 수동으로 실행합니다.
+    """
+    try:
+        performance_optimizer = get_performance_optimizer()
+        memory_before = performance_optimizer.get_memory_usage()
+
+        await performance_optimizer.optimize_memory()
+
+        memory_after = performance_optimizer.get_memory_usage()
+        memory_saved = memory_before["rss_mb"] - memory_after["rss_mb"]
+
+        return {
+            "success": True,
+            "message": "메모리 최적화 완료",
+            "memory_before_mb": memory_before["rss_mb"],
+            "memory_after_mb": memory_after["rss_mb"],
+            "memory_saved_mb": memory_saved,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"성능 최적화 오류: {str(e)}")
+
+@router.get("/performance/memory", response_model=Dict[str, Any])
+async def get_memory_usage(
+    user_id: str = Query(..., description="Admin user ID"),
+    admin_user = Depends(verify_admin)
+):
+    """
+    현재 메모리 사용량을 조회합니다.
+    """
+    try:
+        performance_optimizer = get_performance_optimizer()
+        memory_usage = performance_optimizer.get_memory_usage()
+
+        return {
+            "success": True,
+            "memory_usage": memory_usage,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"메모리 사용량 조회 오류: {str(e)}")
+
+@router.post("/performance/batch-size", response_model=Dict[str, Any])
+async def update_batch_size(
+    user_id: str = Query(..., description="Admin user ID"),
+    action: str = Body(..., description="increase 또는 decrease"),
+    admin_user = Depends(verify_admin)
+):
+    """
+    배치 크기를 수동으로 조정합니다.
+    """
+    try:
+        performance_optimizer = get_performance_optimizer()
+        old_batch_size = performance_optimizer.batch_size
+
+        if action == "increase":
+            performance_optimizer.increase_batch_size()
+        elif action == "decrease":
+            performance_optimizer.decrease_batch_size()
+        else:
+            raise HTTPException(status_code=400, detail="action은 'increase' 또는 'decrease'여야 합니다")
+
+        new_batch_size = performance_optimizer.batch_size
+
+        return {
+            "success": True,
+            "message": f"배치 크기 조정 완료: {old_batch_size} -> {new_batch_size}",
+            "old_batch_size": old_batch_size,
+            "new_batch_size": new_batch_size,
+            "max_batch_size": performance_optimizer.max_batch_size,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"배치 크기 조정 오류: {str(e)}")

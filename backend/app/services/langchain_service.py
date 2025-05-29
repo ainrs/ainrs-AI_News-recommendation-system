@@ -22,6 +22,9 @@ from app.services.system_prompt import get_system_prompt
 # 설정
 from app.core.config import settings
 
+# 캐싱 서비스
+from app.services.summary_cache_service import get_summary_cache_service
+
 # 로깅 설정
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -157,6 +160,42 @@ class LangChainService:
             # 콘텐츠 길이 제한
             if len(content) > 8000:
                 content = content[:8000]
+
+            # 캐시 확인 (동기 버전)
+            cache_service = get_summary_cache_service()
+            if cache_service:
+                import asyncio
+                try:
+                    # 이벤트 루프 안전 실행
+                    def check_cache_safely():
+                        try:
+                            # 기존 루프가 실행 중인지 확인
+                            try:
+                                loop = asyncio.get_event_loop()
+                                if loop.is_running():
+                                    return None
+                            except RuntimeError:
+                                pass
+
+                            # 새 루프에서 캐시 확인
+                            loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(loop)
+                            cached_result = loop.run_until_complete(
+                                cache_service.get_cached_summary(f"{title}\n{content}", "news_analysis")
+                            )
+                            loop.close()
+                            return cached_result
+                        except Exception as e:
+                            logger.warning(f"캐시 확인 중 오류: {e}")
+                            return None
+
+                    cached_result = check_cache_safely()
+                    if cached_result:
+                        logger.info(f"캐시된 분석 결과 사용: {title[:50]}...")
+                        return cached_result
+
+                except Exception as e:
+                    logger.warning(f"캐시 확인 실패, AI 분석 진행: {e}")
 
             # 1. 요약 생성 (동기 버전)
             summary = self.summarization_chain.run(
@@ -377,8 +416,8 @@ class LangChainService:
             if entities:
                 metadata["entities"] = entities
 
-            # 최종 결과 반환
-            return {
+            # 분석 결과 생성
+            analysis_result = {
                 "summary": summary,
                 "keywords": keywords,
                 "sentiment": sentiment_label,
@@ -388,6 +427,44 @@ class LangChainService:
                 "topics": topics,
                 "metadata": metadata
             }
+
+            # 결과를 캐시에 저장 (동기 버전)
+            cache_service = get_summary_cache_service()
+            if cache_service:
+                try:
+                    def save_cache_safely():
+                        try:
+                            # 기존 루프가 실행 중인지 확인
+                            try:
+                                loop = asyncio.get_event_loop()
+                                if loop.is_running():
+                                    return
+                            except RuntimeError:
+                                pass
+
+                            # 새 루프에서 캐시 저장
+                            loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(loop)
+                            loop.run_until_complete(
+                                cache_service.cache_summary(
+                                    content=f"{title}\n{content}",
+                                    summary=summary,
+                                    key_points=keywords,
+                                    analysis_type="news_analysis",
+                                    cache_duration_hours=24
+                                )
+                            )
+                            loop.close()
+                        except Exception as e:
+                            logger.warning(f"캐시 저장 중 오류: {e}")
+
+                    save_cache_safely()
+
+                except Exception as e:
+                    logger.warning(f"캐시 저장 실패: {e}")
+
+            # 최종 결과 반환
+            return analysis_result
         except Exception as e:
             logger.error(f"뉴스 분석 중 오류 발생 (동기): {str(e)}")
             return {"error": str(e)}

@@ -28,6 +28,7 @@ from app.services.scheduler import get_scheduler_service
 from app.services.hybrid_recommendation import get_hybrid_recommendation_service
 from app.services.system_prompt import get_system_prompt
 from app.services.bert4rec_service import get_bert4rec_service
+from app.services.summary_cache_service import initialize_summary_cache_service
 
 # 라우터 가져오기
 from app.routers import news, users, admin, recommendation, auth, email_verification
@@ -137,6 +138,14 @@ app.include_router(email_verification.router, prefix="/api/v1")
 async def startup_event():
     """애플리케이션 시작 시 실행되는 이벤트 핸들러"""
     logger.info("🚀 애플리케이션 시작 이벤트 실행")
+
+    # 캐시 서비스 초기화
+    try:
+        db = get_mongodb_database()
+        initialize_summary_cache_service(db)
+        logger.info("✅ 요약 캐시 서비스 초기화 완료")
+    except Exception as e:
+        logger.error(f"❌ 캐시 서비스 초기화 오류: {e}")
 
     # 스케줄러 서비스 시작
     try:
