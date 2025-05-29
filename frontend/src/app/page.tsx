@@ -13,6 +13,8 @@ import TerminologyPanel from "@/components/TerminologyPanel";
 import SubscriptionPanel from "@/components/SubscriptionPanel";
 import RecommendedNewsSection from "@/components/RecommendedNewsSection";
 import RelatedNewsSection from "@/components/RelatedNewsSection";
+import { CategoryNewsSection } from "@/components/CategoryNewsSection";
+import { RealTimeNewsUpdates } from "@/components/RealTimeNewsUpdates";
 import LoginForm from "@/components/LoginForm";
 import { apiClient } from "@/lib/api/client";
 import { useAuth } from "@/lib/auth/authContext";
@@ -130,60 +132,20 @@ export default function Home() {
                 showTrending={false}
               />
 
-              {/* 섹션별 뉴스 */}
-              <section className="mb-10">
-                <Tabs defaultValue="ai" className="w-full">
-                  <TabsList className="grid w-full grid-cols-4">
-                    <TabsTrigger value="ai">인공지능</TabsTrigger>
-                    <TabsTrigger value="data">빅데이터</TabsTrigger>
-                    <TabsTrigger value="cloud">클라우드</TabsTrigger>
-                    <TabsTrigger value="startup">스타트업</TabsTrigger>
-                  </TabsList>
-                  <TabsContent value="ai" className="pt-4">
-                    <NewsSection
-                      title=""
-                      category="인공지능"
-                      limit={4}
-                    />
-                  </TabsContent>
-
-                  <TabsContent value="data" className="pt-4">
-                    <NewsSection
-                      title=""
-                      category="빅데이터"
-                      limit={4}
-                    />
-                  </TabsContent>
-
-                  <TabsContent value="cloud" className="pt-4">
-                    <NewsSection
-                      title=""
-                      category="클라우드"
-                      limit={4}
-                    />
-                  </TabsContent>
-
-                  <TabsContent value="startup" className="pt-4">
-                    <NewsSection
-                      title=""
-                      category="스타트업"
-                      limit={4}
-                    />
-                  </TabsContent>
-                </Tabs>
-              </section>
-
-              {/* AI 서비스 리뷰 */}
-              <NewsSection
-                title="AI 서비스 리뷰"
-                category="ai-서비스"
-                limit={3}
-                view="grid"
-              />
+              {/* 카테고리별 뉴스 - 스마트 필터링된 고품질 뉴스 */}
+              <CategoryNewsSection />
             </div>
 
             {/* 오른쪽 사이드바 */}
             <div className="w-full lg:w-1/3">
+              {/* 실시간 업데이트 */}
+              <RealTimeNewsUpdates
+                categories={['인공지능', 'IT기업', '빅데이터', '스타트업']}
+                onNewArticle={(article) => {
+                  console.log('새 기사 도착:', article.title);
+                }}
+              />
+
               {/* 인기 뉴스 */}
               <TrendingNewsSection />
 

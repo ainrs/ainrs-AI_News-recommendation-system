@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { apiClient } from '@/lib/api/client';
-import { Comment } from '@/lib/api/client';
+import type { Comment } from '@/lib/api/client';
 import { format } from 'date-fns';
 import { ko } from 'date-fns/locale';
 

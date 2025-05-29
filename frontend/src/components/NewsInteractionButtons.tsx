@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { ThumbsUp, Bookmark, Share, MessageSquare, ThumbsDown, AlertTriangle } from 'lucide-react';
 import { apiClient } from '@/lib/api/client';
-import { type NewsForDisplay } from '@/lib/api/newsService';
+import type { NewsForDisplay } from '@/lib/api/newsService';
 
 interface NewsInteractionButtonsProps {
   newsId: string;
