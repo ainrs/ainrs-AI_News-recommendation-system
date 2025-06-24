@@ -1,11 +1,13 @@
 import os
 import logging
 import uuid
-from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks, Query
+from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 from pydantic import BaseModel
+import json
+import asyncio
 
 from app.core.config import settings
 from app.db.mongodb import news_collection, user_collection, user_interactions_collection, get_mongodb_database
@@ -124,6 +126,112 @@ def get_hybrid_recommendation_service_dep():
 # Dependency to get system prompt
 def get_system_prompt_dep():
     return get_system_prompt()
+
+# WebSocket 연결 관리
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: List[WebSocket] = []
+
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+        logger.info(f"WebSocket 연결됨. 총 연결 수: {len(self.active_connections)}")
+
+    def disconnect(self, websocket: WebSocket):
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
+        logger.info(f"WebSocket 연결 해제됨. 총 연결 수: {len(self.active_connections)}")
+
+    async def send_personal_message(self, message: str, websocket: WebSocket):
+        try:
+            await websocket.send_text(message)
+        except:
+            self.disconnect(websocket)
+
+    async def broadcast(self, message: str):
+        disconnected = []
+        for connection in self.active_connections:
+            try:
+                await connection.send_text(message)
+            except:
+                disconnected.append(connection)
+
+        # 연결이 끊어진 WebSocket 정리
+        for connection in disconnected:
+            self.disconnect(connection)
+
+manager = ConnectionManager()
+
+# WebSocket 엔드포인트
+@app.websocket("/ws/news-updates")
+async def websocket_endpoint(websocket: WebSocket):
+    await manager.connect(websocket)
+    try:
+        # 연결 확인 메시지 전송
+        await websocket.send_text(json.dumps({
+            "type": "connected",
+            "message": "실시간 업데이트 연결됨",
+            "timestamp": datetime.utcnow().isoformat()
+        }))
+
+        while True:
+            try:
+                # 클라이언트로부터 메시지 수신 (타임아웃 늘림)
+                data = await asyncio.wait_for(websocket.receive_text(), timeout=60.0)
+
+                # 클라이언트가 보낸 메시지 처리
+                try:
+                    message = json.loads(data)
+                    if message.get("type") == "subscribe_categories":
+                        await websocket.send_text(json.dumps({
+                            "type": "subscription_confirmed",
+                            "categories": message.get("categories", []),
+                            "timestamp": datetime.utcnow().isoformat()
+                        }))
+                    elif message.get("type") == "ping":
+                        # 클라이언트 ping에 pong 응답
+                        await websocket.send_text(json.dumps({
+                            "type": "pong",
+                            "timestamp": datetime.utcnow().isoformat()
+                        }))
+                except json.JSONDecodeError:
+                    # JSON이 아닌 메시지는 무시
+                    continue
+
+            except asyncio.TimeoutError:
+                # 60초마다 서버에서 ping 전송 (연결 확인)
+                try:
+                    await websocket.send_text(json.dumps({
+                        "type": "server_ping",
+                        "timestamp": datetime.utcnow().isoformat()
+                    }))
+                except:
+                    # 전송 실패 시 연결 종료
+                    break
+
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
+        logger.info("WebSocket 클라이언트가 연결을 종료했습니다")
+    except Exception as e:
+        logger.error(f"WebSocket 오류: {e}")
+        manager.disconnect(websocket)
+
+# 새 뉴스 알림 전송 함수
+async def notify_new_article(article_data: dict):
+    """새 뉴스가 추가될 때 모든 연결된 클라이언트에게 알림"""
+    if manager.active_connections:
+        message = json.dumps({
+            "type": "new_article",
+            "data": {
+                "_id": str(article_data.get("_id", "")),
+                "title": article_data.get("title", ""),
+                "source": article_data.get("source", ""),
+                "published_date": article_data.get("published_date", datetime.utcnow()).isoformat() if isinstance(article_data.get("published_date"), datetime) else str(article_data.get("published_date", "")),
+                "categories": article_data.get("categories", [])
+            },
+            "timestamp": datetime.utcnow().isoformat()
+        })
+        await manager.broadcast(message)
 
 # 라우터 등록
 app.include_router(news.router, prefix="/api/v1")
@@ -277,8 +385,22 @@ async def run_diagnostics():
 async def manual_run_crawler():
     """RSS 크롤러를 수동으로 실행합니다."""
     try:
+        # 크롤링 전 기존 뉴스 개수
+        before_count = news_collection.count_documents({})
+
         article_count = run_crawler()
-        return {"success": True, "message": f"크롤러 실행 성공: {article_count}개 기사 수집됨"}
+
+        # 크롤링 후 새 뉴스가 있으면 알림 전송
+        after_count = news_collection.count_documents({})
+        new_articles_count = after_count - before_count
+
+        if new_articles_count > 0:
+            # 최신 뉴스 가져와서 알림 전송
+            latest_articles = list(news_collection.find().sort("created_at", -1).limit(new_articles_count))
+            for article in latest_articles:
+                await notify_new_article(article)
+
+        return {"success": True, "message": f"크롤러 실행 성공: {article_count}개 기사 수집됨, {new_articles_count}개 실시간 알림 전송"}
     except Exception as e:
         logger.error(f"❌ 수동 크롤러 실행 오류: {e}")
         return {"success": False, "error": str(e)}
@@ -320,8 +442,31 @@ async def health_check():
 @app.post("/api/v1/crawl")
 async def crawl_news(background_tasks: BackgroundTasks):
     """Crawl news from RSS feeds"""
-    background_tasks.add_task(run_crawler)
+    background_tasks.add_task(run_crawler_with_notifications)
     return {"message": "News crawling started in background"}
+
+async def run_crawler_with_notifications():
+    """크롤러 실행 후 새 뉴스 알림 전송"""
+    try:
+        # 크롤링 전 기존 뉴스 개수
+        before_count = news_collection.count_documents({})
+
+        # 크롤러 실행
+        article_count = run_crawler()
+
+        # 크롤링 후 새 뉴스 개수
+        after_count = news_collection.count_documents({})
+        new_articles_count = after_count - before_count
+
+        if new_articles_count > 0:
+            # 최신 뉴스 가져와서 알림 전송
+            latest_articles = list(news_collection.find().sort("created_at", -1).limit(new_articles_count))
+            for article in latest_articles:
+                await notify_new_article(article)
+
+        logger.info(f"크롤링 완료: {new_articles_count}개 새 기사 알림 전송")
+    except Exception as e:
+        logger.error(f"크롤러 알림 전송 중 오류: {e}")
 
 @app.post("/api/v1/force-update")
 async def force_update(background_tasks: BackgroundTasks):
