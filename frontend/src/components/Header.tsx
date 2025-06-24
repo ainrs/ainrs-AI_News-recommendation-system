@@ -18,13 +18,12 @@ export default function Header() {
   const { user, isAuthenticated, logout } = useAuth();
   const router = useRouter();
 
-  // 메인 페이지에서 로그인 폼 상태 설정
   const handleLoginClick = () => {
-    // 로컬 스토리지를 사용하여 상태 공유
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('variety_ai_show_login', 'true');
-      window.location.href = '/'; // 페이지 새로고침하여 설정 적용
-    }
+    router.push('/login');
+  };
+
+  const handleSignupClick = () => {
+    router.push('/signup');
   };
 
   const handleLogoutClick = () => {
@@ -80,7 +79,7 @@ export default function Header() {
             ) : (
               <>
                 <Button variant="ghost" size="sm" onClick={handleLoginClick}>로그인</Button>
-                <Button size="sm" onClick={handleLoginClick}>회원가입</Button>
+                <Button size="sm" onClick={handleSignupClick}>회원가입</Button>
               </>
             )}
           </div>

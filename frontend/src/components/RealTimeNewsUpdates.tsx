@@ -34,7 +34,9 @@ export function RealTimeNewsUpdates({
 
   // WebSocket이 지원되지 않는 환경에서는 폴링 사용
   const usePolling = useCallback(() => {
-    return typeof window === 'undefined' || !window.WebSocket;
+    // 임시로 항상 폴링 사용 (WebSocket 문제 해결 시까지)
+    return true;
+    // return typeof window === 'undefined' || !window.WebSocket;
   }, []);
 
   // 폴링 기반 실시간 업데이트
@@ -110,6 +112,7 @@ export function RealTimeNewsUpdates({
         : 'ws://localhost:8000/ws/news-updates';
 
       const ws = new WebSocket(wsUrl);
+      let reconnectTimer: NodeJS.Timeout | null = null;
 
       ws.onopen = () => {
         console.log('WebSocket 연결됨');
@@ -127,15 +130,25 @@ export function RealTimeNewsUpdates({
 
       ws.onmessage = (event) => {
         try {
-          const update: RealTimeUpdate = JSON.parse(event.data);
+          const message = JSON.parse(event.data);
 
-          setUpdates(prev => [update, ...prev.slice(0, 19)]); // 최근 20개만 유지
-          setLastUpdate(new Date().toISOString());
+          // 연결 확인 메시지는 업데이트에 추가하지 않음
+          if (message.type === 'connected' || message.type === 'server_ping' || message.type === 'pong') {
+            console.log('WebSocket 연결 상태 확인:', message.type);
+            return;
+          }
 
-          if (update.type === 'new_article') {
-            setNewArticlesCount(prev => prev + 1);
-            if (onNewArticle) {
-              onNewArticle(update.data);
+          // 실제 업데이트만 처리
+          if (message.type === 'new_article' || message.type === 'category_update' || message.type === 'trending_change') {
+            const update: RealTimeUpdate = message;
+            setUpdates(prev => [update, ...prev.slice(0, 19)]); // 최근 20개만 유지
+            setLastUpdate(new Date().toISOString());
+
+            if (update.type === 'new_article') {
+              setNewArticlesCount(prev => prev + 1);
+              if (onNewArticle) {
+                onNewArticle(update.data);
+              }
             }
           }
         } catch (error) {
@@ -143,16 +156,22 @@ export function RealTimeNewsUpdates({
         }
       };
 
-      ws.onclose = () => {
-        console.log('WebSocket 연결 종료');
+      ws.onclose = (event) => {
+        console.log('WebSocket 연결 종료:', event.code, event.reason);
         setIsConnected(false);
 
-        // 자동 재연결 (최대 5회)
-        if (retryCount < 5) {
-          setTimeout(() => {
+        // 정상 종료가 아니고 재시도 횟수가 5회 미만인 경우만 재연결
+        if (event.code !== 1000 && retryCount < 5) {
+          const delay = Math.min(Math.pow(2, retryCount) * 1000, 30000); // 최대 30초
+          console.log(`${delay}ms 후 WebSocket 재연결 시도 (${retryCount + 1}/5)`);
+
+          reconnectTimer = setTimeout(() => {
             setRetryCount(prev => prev + 1);
             connectWebSocket();
-          }, Math.pow(2, retryCount) * 1000); // 지수 백오프
+          }, delay);
+        } else if (retryCount >= 5) {
+          console.log('WebSocket 재연결 최대 횟수 초과, 폴링으로 전환');
+          startPolling();
         }
       };
 
@@ -162,7 +181,10 @@ export function RealTimeNewsUpdates({
       };
 
       return () => {
-        ws.close();
+        if (reconnectTimer) {
+          clearTimeout(reconnectTimer);
+        }
+        ws.close(1000, 'Component unmounting'); // 정상 종료 코드
       };
     } catch (error) {
       console.error('WebSocket 연결 실패:', error);

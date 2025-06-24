@@ -67,44 +67,7 @@ export default function Home() {
     fetchInitialData();
   }, []);
 
-  // 로그인 폼 표시 여부 상태
-  const [showLoginForm, setShowLoginForm] = useState(false);
-
-  // 로컬 스토리지에서 로그인 폼 표시 여부 읽기
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      const shouldShowLogin = localStorage.getItem('variety_ai_show_login') === 'true';
-      setShowLoginForm(shouldShowLogin);
-
-      // 상태를 읽은 후 리셋
-      if (shouldShowLogin) {
-        localStorage.removeItem('variety_ai_show_login');
-      }
-    }
-  }, []);
-
-  // 실제 로그인 폼 표시 로직
-  if (!isLoading && (showLoginForm || (!isAuthenticated && showLoginForm))) {
-    return (
-      <div className="min-h-screen flex flex-col">
-        {/* 헤더 */}
-        <Header />
-
-        {/* 메인 내비게이션 */}
-        <MainNavigation />
-
-        {/* 로그인 및 회원가입 화면 */}
-        <main className="flex-grow bg-background flex items-center justify-center p-6">
-          <div className="w-full max-w-md">
-            <LoginForm onLoginSuccess={() => setShowLoginForm(false)} />
-          </div>
-        </main>
-
-        {/* 푸터 */}
-        <Footer />
-      </div>
-    );
-  }
+  // 홈 페이지는 항상 뉴스 화면을 표시
 
   return (
     <div className="min-h-screen flex flex-col">
